@@ -921,9 +921,6 @@ public:
   /// bound.
   bool isClassExistentialType();
 
-  /// Opens an existential instance or meta-type and returns the opened type.
-  Type openAnyExistentialType(OpenedArchetypeType *&opened);
-
   /// Break an existential down into a set of constraints.
   ExistentialLayout getExistentialLayout();
 
@@ -6846,7 +6843,7 @@ public:
   ///
   /// \param existential The existential type or existential metatype to open.
   /// \param interfaceType The interface type represented by this archetype.
-  static CanType getAny(CanType existential, Type interfaceType);
+  static Type getAny(Type existential, Type interfaceType);
 
   /// Create a new archetype that represents the opened type
   /// of an existential value.
@@ -6856,7 +6853,7 @@ public:
   /// will unwrap any existential metatype containers.
   ///
   /// \param existential The existential type or existential metatype to open.
-  static CanType getAny(CanType existential);
+  static Type getAny(Type existential);
 
   /// Retrieve the ID number of this opened existential.
   UUID getOpenedExistentialID() const;
