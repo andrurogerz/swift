@@ -2455,7 +2455,11 @@ function Build-AndroidSDK($Arch) {
   $Properties = @{
     BundleFlavor = "offline";
     PLATFORM_ROOT = "$($Arch.PlatformInstallRoot)\";
-    SDK_ROOT = "$($Arch.SDKInstallRoot)\"
+    SDK_ROOT = "$($Arch.SDKInstallRoot)\";
+  }
+
+  if ($IncludeDS2) {
+    $Properties["ANDROID_INCLUDE_DS2"] = "true"
   }
 
   Build-WiXProject android_sdk\android_sdk.wixproj -ArchName $Arch.LLVMName -BinaryCache $Arch.BinaryCache -Bundle -Properties $Properties
