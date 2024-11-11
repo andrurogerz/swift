@@ -168,6 +168,20 @@ internal func getRemoteProcess(processId: ProcessIdentifier,
   return LinuxRemoteProcess(processId: processId)
 }
 
+#elseif os(Android)
+
+internal typealias ProcessIdentifier = AndroidRemoteProcess.ProcessIdentifier
+
+internal func process(matching: String) -> ProcessIdentifier? {
+  // TODO(andrurogerz)
+  return nil
+}
+
+internal func getRemoteProcess(processId: ProcessIdentifier,
+                               options: UniversalOptions) -> (any RemoteProcess)? {
+  return AndroidRemoteProcess(processId: processId)
+}
+
 #else
 #error("Unsupported platform")
 #endif
