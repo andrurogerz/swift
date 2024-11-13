@@ -25,8 +25,27 @@ internal final class AndroidRemoteProcess: RemoteProcess {
 
   static var QueryDataLayout: QueryDataLayoutFunction {
     return { (context, type, _, output) in
-      // TODO(andrurogerz)
-      return 0
+      guard let output = output else { return 0 }
+
+      switch type {
+      case DLQ_GetPointerSize:
+        let size = UInt8(MemoryLayout<UnsafeRawPointer>.stride)
+        output.storeBytes(of: size, toByteOffset: 0, as: UInt8.self)
+        return 1
+
+      case DLQ_GetSizeSize:
+        let size = UInt8(MemoryLayout<UInt>.stride) // UInt is word-size like size_t
+        output.storeBytes(of: size, toByteOffset: 0, as: UInt8.self)
+        return 1
+
+      case DLQ_GetLeastValidPointerValue:
+        let value: UInt64 = 0x1000
+        output.storeBytes(of: value, toByteOffset: 0, as: UInt64.self)
+        return 1
+
+      default:
+        return 0
+      }
     }
   }
 
