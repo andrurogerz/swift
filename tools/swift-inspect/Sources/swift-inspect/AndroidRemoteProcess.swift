@@ -25,42 +25,50 @@ internal final class AndroidRemoteProcess: RemoteProcess {
 
   static var QueryDataLayout: QueryDataLayoutFunction {
     return { (context, type, _, output) in
-        // TODO(andrurogerz)
-        return 0
+      // TODO(andrurogerz)
+      return 0
     }
   }
 
   static var Free: FreeFunction {
     return { (_, bytes, _) in
-        // TODO(andrurogerz)
-        return
+      // TODO(andrurogerz)
+      return
     }
   }
 
   static var ReadBytes: ReadBytesFunction {
     return { (context, address, size, _) in
-        // TODO(andrurogerz)
-        return nil
+      // TODO(andrurogerz)
+      return nil
     }
   }
 
   static var GetStringLength: GetStringLengthFunction {
     return { (context, address) in
-        // TODO(andrurogerz)
-        return 0
+      // TODO(andrurogerz)
+      return 0
     }
   }
 
   static var GetSymbolAddress: GetSymbolAddressFunction {
     return { (context, symbol, length) in
-        // TODO(andrurogerz)
-        return 0
+      // TODO(andrurogerz)
+      return 0
     }
   }
 
   init?(processId: ProcessIdentifier) {
     self.process = processId
     self.processIdentifier = processId
+
+    let procfs_cmdline_path = "/proc/\(processId)/cmdline"
+    guard let cmdline = try? String(contentsOfFile: procfs_cmdline_path,
+                                    encoding: .utf8) else {
+      return nil
+    }
+    self.processName = cmdline;
+
     guard let context =
         swift_reflection_createReflectionContextWithDataLayout(self.toOpaqueRef(),
                                                                Self.QueryDataLayout,
