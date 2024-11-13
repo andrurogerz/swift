@@ -12,12 +12,42 @@
 
 #if os(Android)
 
+import Foundation
 import SwiftRemoteMirror
 import PosixInterface
 
 internal final class AndroidRemoteProcess: RemoteProcess {
   public typealias ProcessIdentifier = pid_t
   public typealias ProcessHandle = pid_t // TODO(andrurogerz) wrong type?
+
+  // describes a line from the /proc/<pid>/maps file
+  struct MemoryMapEntry {
+    let startAddress: UInt64
+    let endAddress: UInt64
+    let permissions: String
+    let offset: UInt64
+    let device: String
+    let inode: UInt64
+    let pathName: String?
+
+    func isReadable() -> Bool {
+      return self.permissions.contains("r")
+    }
+
+    func isWriteable() -> Bool {
+      return self.permissions.contains("w")
+    }
+
+    func isExecutable() -> Bool {
+      return self.permissions.contains("x")
+    }
+
+    func isPrivate() -> Bool {
+      return self.permissions.contains("p")
+    }
+  }
+
+  private var memoryMap: [MemoryMapEntry]
 
   public private(set) var process: ProcessHandle
   public private(set) var context: SwiftReflectionContextRef!
@@ -78,6 +108,72 @@ internal final class AndroidRemoteProcess: RemoteProcess {
     }
   }
 
+  // Return an array of MemoryMapEntry items describing all of the memory ranges
+  // in processId in the order they appear in /proc/\(processId)/maps.
+  static func loadMemoryMap(_ processId: ProcessIdentifier) -> [MemoryMapEntry]? {
+    let path = "/proc/\(processId)/maps"
+    guard let fileHandle = try? FileHandle(forReadingFrom: URL(fileURLWithPath: path)) else {
+      print("failed to to open file \(path)")
+      return nil
+    }
+    defer { fileHandle.closeFile() }
+
+    guard let content = String(data: fileHandle.readDataToEndOfFile(), encoding: .utf8) else {
+      print("failed loading data from file \(path)")
+      return nil
+    }
+
+    var memoryMapEntries = [MemoryMapEntry]()
+    let lines = content.split(separator: "\n")
+    for line in lines {
+      let parts = line.split(separator: " ", omittingEmptySubsequences: true)
+      guard parts.count >= 5 else {
+        print("unexpected line in \(path): \"\(line)\"")
+        continue
+      }
+
+      // start end end address of the memory region in base 16
+      let addresses = parts[0].split(separator: "-")
+      guard addresses.count == 2,
+        let startAddress = UInt64(addresses[0], radix: 16),
+        let endAddress = UInt64(addresses[1], radix: 16) else {
+        print("unexpected address range format in \(path): \"\(parts[0])\"")
+        continue
+      }
+
+      // access permissions of the memory region (ex. "r-xp", "rw-p")
+      let permissions = String(parts[1])
+
+      // offset in the file (if file-backed) in base 16
+      guard let offset = UInt64(parts[2], radix: 16) else {
+        print("unexpected offset value in \(path): \"\(parts[2])\"")
+        continue
+      }
+
+      // device number associated with the memory region
+      let device = String(parts[3])
+
+      // inode of the file (if file-backed) in base 10
+      guard let inode = UInt64(parts[4]) else {
+        print("unexpected inode value in \(path): \"\(parts[4])\"")
+        continue
+      }
+
+      // optional name of the region, or path to file if file-backed
+      let pathName = parts.count > 5 ? String(parts[5]) : nil
+      memoryMapEntries.append(MemoryMapEntry(
+        startAddress: startAddress,
+        endAddress: endAddress,
+        permissions: permissions,
+        offset: offset,
+        device: device,
+        inode: inode,
+        pathName: pathName))
+    }
+
+    return memoryMapEntries
+  }
+
   init?(processId: ProcessIdentifier) {
     self.process = processId
     self.processIdentifier = processId
@@ -88,6 +184,20 @@ internal final class AndroidRemoteProcess: RemoteProcess {
       return nil
     }
     self.processName = cmdline;
+
+    // TODO(andrurogerz): we should load the memory map as late as possible to
+    // avoid missing any new entries
+    guard let memoryMap = AndroidRemoteProcess.loadMemoryMap(processId) else {
+      return nil
+    }
+    self.memoryMap = memoryMap
+
+    print("target process \(processId) has \(memoryMap.count) regions in its memory map")
+
+    let thisProcessId = getpid()
+    if let myMemoryMap = AndroidRemoteProcess.loadMemoryMap(thisProcessId) {
+      print("this process \(thisProcessId) has \(myMemoryMap.count) regions in its memory map")
+    }
 
     guard let context =
         swift_reflection_createReflectionContextWithDataLayout(self.toOpaqueRef(),

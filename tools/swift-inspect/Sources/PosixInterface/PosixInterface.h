@@ -12,6 +12,8 @@
 
 #ifdef __linux__
 
+#include <unistd.h>
+
 #include <sys/ptrace.h>
 #include <sys/types.h>
 #include <sys/wait.h>
