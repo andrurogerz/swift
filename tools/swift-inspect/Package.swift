@@ -20,6 +20,7 @@ let package = Package(
                 .target(name: "SwiftInspectClient", condition: .when(platforms: [.windows])),
                 .target(name: "SwiftInspectClientInterface", condition: .when(platforms: [.windows])),
                 .target(name: "SwiftInspectLinux", condition: .when(platforms: [.linux])),
+                .target(name: "PosixInterface", condition: .when(platforms: [.android])),
             ],
             swiftSettings: [.unsafeFlags(["-parse-as-library"])]),
         .target(name: "SwiftInspectClient"),
@@ -38,7 +39,9 @@ let package = Package(
             name: "swiftInspectTests",
             dependencies: ["swift-inspect"]),
         .systemLibrary(
-            name: "SymbolicationShims")
+            name: "SymbolicationShims"),
+        .systemLibrary(
+            name: "PosixInterface")
     ]
 )
 

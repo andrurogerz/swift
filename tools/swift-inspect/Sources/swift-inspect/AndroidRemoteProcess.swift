@@ -13,6 +13,7 @@
 #if os(Android)
 
 import SwiftRemoteMirror
+import PosixInterface
 
 internal final class AndroidRemoteProcess: RemoteProcess {
   public typealias ProcessIdentifier = pid_t
@@ -98,6 +99,11 @@ internal final class AndroidRemoteProcess: RemoteProcess {
       return nil
     }
     self.context = context
+    let ptrace_result = ptrace_attach(processId)
+    print("ptrace_result:\(ptrace_result)")
+    var status: Int32 = 0;
+    let wait_result = wait(&status)
+    print("wait_result:\(wait_result), status:\(status)")
   }
 
   deinit {

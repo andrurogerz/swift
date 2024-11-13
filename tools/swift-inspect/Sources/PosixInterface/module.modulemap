@@ -1,0 +1,4 @@
+module PosixInterface {
+  header "PosixInterface.h"
+  export *
+}
