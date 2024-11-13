@@ -169,12 +169,23 @@ internal func getRemoteProcess(processId: ProcessIdentifier,
 }
 
 #elseif os(Android)
+import Foundation
 
 internal typealias ProcessIdentifier = AndroidRemoteProcess.ProcessIdentifier
 
 internal func process(matching: String) -> ProcessIdentifier? {
-  // TODO(andrurogerz)
-  return nil
+  guard let processId = AndroidRemoteProcess.ProcessIdentifier(matching) else {
+    return nil
+  }
+
+  let procfs_path = "/proc/\(processId)"
+  var isDirectory: Bool = false
+  guard FileManager.default.fileExists(atPath: procfs_path, isDirectory: &isDirectory)
+        && isDirectory else {
+    return nil
+  }
+
+  return processId
 }
 
 internal func getRemoteProcess(processId: ProcessIdentifier,

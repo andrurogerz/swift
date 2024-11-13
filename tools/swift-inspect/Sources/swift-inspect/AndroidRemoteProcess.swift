@@ -59,10 +59,18 @@ internal final class AndroidRemoteProcess: RemoteProcess {
   }
 
   init?(processId: ProcessIdentifier) {
-    // TODO(andrurogerz)
-    self.process = 0
-    self.context = nil
-    self.processIdentifier = 0
+    self.process = processId
+    self.processIdentifier = processId
+    guard let context =
+        swift_reflection_createReflectionContextWithDataLayout(self.toOpaqueRef(),
+                                                               Self.QueryDataLayout,
+                                                               Self.Free,
+                                                               Self.ReadBytes,
+                                                               Self.GetStringLength,
+                                                               Self.GetSymbolAddress) else {
+      return nil
+    }
+    self.context = context
   }
 
   deinit {
