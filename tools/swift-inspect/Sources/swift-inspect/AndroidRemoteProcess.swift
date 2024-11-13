@@ -47,6 +47,12 @@ internal final class AndroidRemoteProcess: RemoteProcess {
     }
   }
 
+  struct TargetFunctionAddrs {
+    let dlopenAddr: UInt64
+    let dlcloseAddr: UInt64
+    let dlsymAddr: UInt64
+  }
+
   private var memoryMap: [MemoryMapEntry]
 
   public private(set) var process: ProcessHandle
@@ -174,6 +180,101 @@ internal final class AndroidRemoteProcess: RemoteProcess {
     return memoryMapEntries
   }
 
+  static func findFunctionInTarget(libName: String, funcName: String,
+                                  currentProcessMemoryMap: [MemoryMapEntry],
+                                  targetProcessMemoryMap: [MemoryMapEntry]) -> UInt64? {
+    guard let libHandle = dlopen(libName, RTLD_LAZY) else {
+      print("failed dlopen(\(libName))")
+      return nil
+    }
+    defer { dlclose(libHandle) }
+
+    guard let funcPointer = dlsym(libHandle, funcName) else {
+      print("failed dlsym(\(funcName))")
+      return nil
+    }
+
+    let funcAddr = unsafeBitCast(funcPointer, to: UInt64.self)
+
+    var foundRegion: MemoryMapEntry? = nil
+    for region in currentProcessMemoryMap {
+      if region.pathName != nil &&
+         region.isExecutable() &&
+         funcAddr >= region.startAddress &&
+         funcAddr < region.endAddress {
+        foundRegion = region
+        break
+      }
+    }
+
+    guard let regionInCurrentProcess = foundRegion else {
+      print("no memory region in current process containing \(funcName)")
+      return nil
+    }
+
+    foundRegion = nil
+    for region in targetProcessMemoryMap {
+      guard let pathName = region.pathName else {
+        continue
+      }
+
+      let regionInTargetProcessLen = region.endAddress - region.startAddress;
+      let regionInCurrentProcessLen = regionInCurrentProcess.endAddress - regionInCurrentProcess.startAddress;
+      if region.permissions == regionInCurrentProcess.permissions &&
+         region.pathName == regionInCurrentProcess.pathName &&
+         regionInTargetProcessLen == regionInCurrentProcessLen {
+        foundRegion = region
+        break
+      }
+    }
+
+    guard let regionInTargetProcess = foundRegion else {
+      print("no memory region \(regionInCurrentProcess.pathName!) in target process containing \(funcName)")
+      return nil
+    }
+
+    let funcOffsetInRegion = funcAddr - regionInCurrentProcess.startAddress
+    let funcAddrInTargetProcess = regionInTargetProcess.startAddress + funcOffsetInRegion
+    return funcAddrInTargetProcess
+  }
+
+  static func findFuntionsInTarget(processId: ProcessIdentifier) -> TargetFunctionAddrs? {
+    guard let currentProcessMemoryMap = AndroidRemoteProcess.loadMemoryMap(getpid()) else {
+      return nil
+    }
+
+    guard let targetProcessMemoryMap = AndroidRemoteProcess.loadMemoryMap(processId) else {
+      return nil
+    }
+
+    guard let dlopenAddr = findFunctionInTarget(libName: "libc.so", funcName: "dlopen",
+                                                currentProcessMemoryMap: currentProcessMemoryMap,
+                                                targetProcessMemoryMap: targetProcessMemoryMap) else {
+      return nil
+    }
+    print("dlopen in target process is at \(String(dlopenAddr, radix: 16))")
+
+    guard let dlcloseAddr = findFunctionInTarget(libName: "libc.so", funcName: "dlclose",
+                                                 currentProcessMemoryMap: currentProcessMemoryMap,
+                                                 targetProcessMemoryMap: targetProcessMemoryMap) else {
+      return nil
+    }
+    print("dlclose in target process is at \(String(dlcloseAddr, radix: 16))")
+
+    guard let dlsymAddr = findFunctionInTarget(libName: "libc.so", funcName: "dlsym",
+                                               currentProcessMemoryMap: currentProcessMemoryMap,
+                                               targetProcessMemoryMap: targetProcessMemoryMap) else {
+      return nil
+    }
+    print("dlsym in target process is at \(String(dlsymAddr, radix: 16))")
+
+    return TargetFunctionAddrs(
+      dlopenAddr: dlopenAddr,
+      dlcloseAddr: dlcloseAddr,
+      dlsymAddr: dlsymAddr,
+    )
+  }
+
   init?(processId: ProcessIdentifier) {
     self.process = processId
     self.processIdentifier = processId
@@ -214,6 +315,10 @@ internal final class AndroidRemoteProcess: RemoteProcess {
     var status: Int32 = 0;
     let wait_result = wait(&status)
     print("wait_result:\(wait_result), status:\(status)")
+
+    guard let targetFunctionAddrs = AndroidRemoteProcess.findFuntionsInTarget(processId: processId) else {
+      return nil
+    };
   }
 
   deinit {

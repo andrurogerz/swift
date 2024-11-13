@@ -12,6 +12,7 @@
 
 #ifdef __linux__
 
+#include <dlfcn.h>
 #include <unistd.h>
 
 #include <sys/ptrace.h>
