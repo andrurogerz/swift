@@ -22,12 +22,12 @@ internal final class AndroidRemoteProcess: RemoteProcess {
 
   // describes a line from the /proc/<pid>/maps file
   struct MemoryMapEntry {
-    let startAddress: UInt64
-    let endAddress: UInt64
+    let startAddress: UInt
+    let endAddress: UInt
     let permissions: String
-    let offset: UInt64
+    let offset: UInt
     let device: String
-    let inode: UInt64
+    let inode: UInt
     let pathName: String?
 
     func isReadable() -> Bool {
@@ -48,9 +48,11 @@ internal final class AndroidRemoteProcess: RemoteProcess {
   }
 
   struct TargetFunctionAddrs {
-    let dlopenAddr: UInt64
-    let dlcloseAddr: UInt64
-    let dlsymAddr: UInt64
+    let dlopenAddr: UInt
+    let dlcloseAddr: UInt
+    let dlsymAddr: UInt
+    let mmapAddr: UInt
+    let munmapAddr: UInt
   }
 
   private var memoryMap: [MemoryMapEntry]
@@ -141,8 +143,8 @@ internal final class AndroidRemoteProcess: RemoteProcess {
       // start end end address of the memory region in base 16
       let addresses = parts[0].split(separator: "-")
       guard addresses.count == 2,
-        let startAddress = UInt64(addresses[0], radix: 16),
-        let endAddress = UInt64(addresses[1], radix: 16) else {
+        let startAddress = UInt(addresses[0], radix: 16),
+        let endAddress = UInt(addresses[1], radix: 16) else {
         print("unexpected address range format in \(path): \"\(parts[0])\"")
         continue
       }
@@ -151,7 +153,7 @@ internal final class AndroidRemoteProcess: RemoteProcess {
       let permissions = String(parts[1])
 
       // offset in the file (if file-backed) in base 16
-      guard let offset = UInt64(parts[2], radix: 16) else {
+      guard let offset = UInt(parts[2], radix: 16) else {
         print("unexpected offset value in \(path): \"\(parts[2])\"")
         continue
       }
@@ -160,7 +162,7 @@ internal final class AndroidRemoteProcess: RemoteProcess {
       let device = String(parts[3])
 
       // inode of the file (if file-backed) in base 10
-      guard let inode = UInt64(parts[4]) else {
+      guard let inode = UInt(parts[4]) else {
         print("unexpected inode value in \(path): \"\(parts[4])\"")
         continue
       }
@@ -182,7 +184,7 @@ internal final class AndroidRemoteProcess: RemoteProcess {
 
   static func findFunctionInTarget(libName: String, funcName: String,
                                   currentProcessMemoryMap: [MemoryMapEntry],
-                                  targetProcessMemoryMap: [MemoryMapEntry]) -> UInt64? {
+                                  targetProcessMemoryMap: [MemoryMapEntry]) -> UInt? {
     guard let libHandle = dlopen(libName, RTLD_LAZY) else {
       print("failed dlopen(\(libName))")
       return nil
@@ -194,7 +196,7 @@ internal final class AndroidRemoteProcess: RemoteProcess {
       return nil
     }
 
-    let funcAddr = unsafeBitCast(funcPointer, to: UInt64.self)
+    let funcAddr = UInt(bitPattern: funcPointer)
 
     var foundRegion: MemoryMapEntry? = nil
     for region in currentProcessMemoryMap {
@@ -214,10 +216,6 @@ internal final class AndroidRemoteProcess: RemoteProcess {
 
     foundRegion = nil
     for region in targetProcessMemoryMap {
-      guard let pathName = region.pathName else {
-        continue
-      }
-
       let regionInTargetProcessLen = region.endAddress - region.startAddress;
       let regionInCurrentProcessLen = regionInCurrentProcess.endAddress - regionInCurrentProcess.startAddress;
       if region.permissions == regionInCurrentProcess.permissions &&
@@ -268,16 +266,38 @@ internal final class AndroidRemoteProcess: RemoteProcess {
     }
     print("dlsym in target process is at \(String(dlsymAddr, radix: 16))")
 
+    guard let mmapAddr = findFunctionInTarget(libName: "libc.so", funcName: "mmap",
+                                               currentProcessMemoryMap: currentProcessMemoryMap,
+                                               targetProcessMemoryMap: targetProcessMemoryMap) else {
+      return nil
+    }
+    print("mmapAddr in target process is at \(String(mmapAddr, radix: 16))")
+
+    guard let munmapAddr = findFunctionInTarget(libName: "libc.so", funcName: "munmap",
+                                               currentProcessMemoryMap: currentProcessMemoryMap,
+                                               targetProcessMemoryMap: targetProcessMemoryMap) else {
+      return nil
+    }
+    print("munmapAddr in target process is at \(String(munmapAddr, radix: 16))")
+
     return TargetFunctionAddrs(
       dlopenAddr: dlopenAddr,
       dlcloseAddr: dlcloseAddr,
       dlsymAddr: dlsymAddr,
+      mmapAddr: mmapAddr,
+      munmapAddr: munmapAddr,
     )
   }
 
   init?(processId: ProcessIdentifier) {
     self.process = processId
     self.processIdentifier = processId
+
+    // TODO(andrurogerz): temporary testing out ptrace functionality
+    if !ptrace_attach(processId) {
+      print("ptrace_attach failed")
+      return nil
+    }
 
     let procfs_cmdline_path = "/proc/\(processId)/cmdline"
     guard let cmdline = try? String(contentsOfFile: procfs_cmdline_path,
@@ -310,18 +330,23 @@ internal final class AndroidRemoteProcess: RemoteProcess {
       return nil
     }
     self.context = context
-    let ptrace_result = ptrace_attach(processId)
-    print("ptrace_result:\(ptrace_result)")
-    var status: Int32 = 0;
-    let wait_result = wait(&status)
-    print("wait_result:\(wait_result), status:\(status)")
 
     guard let targetFunctionAddrs = AndroidRemoteProcess.findFuntionsInTarget(processId: processId) else {
       return nil
     };
+
+    let remoteAddr = ptrace_remote_alloc(processId, targetFunctionAddrs.mmapAddr, 0x4000)
+    print("remote allocation at: \(String(remoteAddr, radix: 16))")
+
+    if !ptrace_remote_free(processId, targetFunctionAddrs.munmapAddr, remoteAddr, 0x4000) {
+      print("ptrace_remote_free failed")
+    }
   }
 
   deinit {
+    if !ptrace_detach(self.process) {
+      print("ptrace_detach failed")
+    }
   }
 
   func symbolicate(_ address: swift_addr_t) -> (module: String?, symbol: String?) {
