@@ -13,49 +13,12 @@
 #if os(Android)
 
 import Foundation
+import SwiftInspectAndroid 
 import SwiftRemoteMirror
-import PosixInterface
 
 internal final class AndroidRemoteProcess: RemoteProcess {
   public typealias ProcessIdentifier = pid_t
-  public typealias ProcessHandle = pid_t // TODO(andrurogerz) wrong type?
-
-  // describes a line from the /proc/<pid>/maps file
-  struct MemoryMapEntry {
-    let startAddress: UInt
-    let endAddress: UInt
-    let permissions: String
-    let offset: UInt
-    let device: String
-    let inode: UInt
-    let pathName: String?
-
-    func isReadable() -> Bool {
-      return self.permissions.contains("r")
-    }
-
-    func isWriteable() -> Bool {
-      return self.permissions.contains("w")
-    }
-
-    func isExecutable() -> Bool {
-      return self.permissions.contains("x")
-    }
-
-    func isPrivate() -> Bool {
-      return self.permissions.contains("p")
-    }
-  }
-
-  struct TargetFunctionAddrs {
-    let dlopenAddr: UInt
-    let dlcloseAddr: UInt
-    let dlsymAddr: UInt
-    let mmapAddr: UInt
-    let munmapAddr: UInt
-  }
-
-  private var memoryMap: [MemoryMapEntry]
+  public typealias ProcessHandle = pid_t
 
   public private(set) var process: ProcessHandle
   public private(set) var context: SwiftReflectionContextRef!
@@ -90,15 +53,25 @@ internal final class AndroidRemoteProcess: RemoteProcess {
 
   static var Free: FreeFunction {
     return { (_, bytes, _) in
-      // TODO(andrurogerz)
-      return
+      free(UnsafeMutableRawPointer(mutating: bytes))
     }
   }
 
   static var ReadBytes: ReadBytesFunction {
     return { (context, address, size, _) in
-      // TODO(andrurogerz)
-      return nil
+      let process: AndroidRemoteProcess =
+        AndroidRemoteProcess.fromOpaque(context!)
+
+      guard let buffer = malloc(Int(size)) else {
+        return nil
+      }
+
+      if !remote_read_memory(process.process, UInt(address), buffer, Int(size)) {
+        free(buffer)
+        return nil
+      }
+
+      return UnsafeRawPointer(buffer)
     }
   }
 
@@ -116,188 +89,9 @@ internal final class AndroidRemoteProcess: RemoteProcess {
     }
   }
 
-  // Return an array of MemoryMapEntry items describing all of the memory ranges
-  // in processId in the order they appear in /proc/\(processId)/maps.
-  static func loadMemoryMap(_ processId: ProcessIdentifier) -> [MemoryMapEntry]? {
-    let path = "/proc/\(processId)/maps"
-    guard let fileHandle = try? FileHandle(forReadingFrom: URL(fileURLWithPath: path)) else {
-      print("failed to to open file \(path)")
-      return nil
-    }
-    defer { fileHandle.closeFile() }
-
-    guard let content = String(data: fileHandle.readDataToEndOfFile(), encoding: .utf8) else {
-      print("failed loading data from file \(path)")
-      return nil
-    }
-
-    var memoryMapEntries = [MemoryMapEntry]()
-    let lines = content.split(separator: "\n")
-    for line in lines {
-      let parts = line.split(separator: " ", omittingEmptySubsequences: true)
-      guard parts.count >= 5 else {
-        print("unexpected line in \(path): \"\(line)\"")
-        continue
-      }
-
-      // start end end address of the memory region in base 16
-      let addresses = parts[0].split(separator: "-")
-      guard addresses.count == 2,
-        let startAddress = UInt(addresses[0], radix: 16),
-        let endAddress = UInt(addresses[1], radix: 16) else {
-        print("unexpected address range format in \(path): \"\(parts[0])\"")
-        continue
-      }
-
-      // access permissions of the memory region (ex. "r-xp", "rw-p")
-      let permissions = String(parts[1])
-
-      // offset in the file (if file-backed) in base 16
-      guard let offset = UInt(parts[2], radix: 16) else {
-        print("unexpected offset value in \(path): \"\(parts[2])\"")
-        continue
-      }
-
-      // device number associated with the memory region
-      let device = String(parts[3])
-
-      // inode of the file (if file-backed) in base 10
-      guard let inode = UInt(parts[4]) else {
-        print("unexpected inode value in \(path): \"\(parts[4])\"")
-        continue
-      }
-
-      // optional name of the region, or path to file if file-backed
-      let pathName = parts.count > 5 ? String(parts[5]) : nil
-      memoryMapEntries.append(MemoryMapEntry(
-        startAddress: startAddress,
-        endAddress: endAddress,
-        permissions: permissions,
-        offset: offset,
-        device: device,
-        inode: inode,
-        pathName: pathName))
-    }
-
-    return memoryMapEntries
-  }
-
-  static func findFunctionInTarget(libName: String, funcName: String,
-                                  currentProcessMemoryMap: [MemoryMapEntry],
-                                  targetProcessMemoryMap: [MemoryMapEntry]) -> UInt? {
-    guard let libHandle = dlopen(libName, RTLD_LAZY) else {
-      print("failed dlopen(\(libName))")
-      return nil
-    }
-    defer { dlclose(libHandle) }
-
-    guard let funcPointer = dlsym(libHandle, funcName) else {
-      print("failed dlsym(\(funcName))")
-      return nil
-    }
-
-    let funcAddr = UInt(bitPattern: funcPointer)
-
-    var foundRegion: MemoryMapEntry? = nil
-    for region in currentProcessMemoryMap {
-      if region.pathName != nil &&
-         region.isExecutable() &&
-         funcAddr >= region.startAddress &&
-         funcAddr < region.endAddress {
-        foundRegion = region
-        break
-      }
-    }
-
-    guard let regionInCurrentProcess = foundRegion else {
-      print("no memory region in current process containing \(funcName)")
-      return nil
-    }
-
-    foundRegion = nil
-    for region in targetProcessMemoryMap {
-      let regionInTargetProcessLen = region.endAddress - region.startAddress;
-      let regionInCurrentProcessLen = regionInCurrentProcess.endAddress - regionInCurrentProcess.startAddress;
-      if region.permissions == regionInCurrentProcess.permissions &&
-         region.pathName == regionInCurrentProcess.pathName &&
-         regionInTargetProcessLen == regionInCurrentProcessLen {
-        foundRegion = region
-        break
-      }
-    }
-
-    guard let regionInTargetProcess = foundRegion else {
-      print("no memory region \(regionInCurrentProcess.pathName!) in target process containing \(funcName)")
-      return nil
-    }
-
-    let funcOffsetInRegion = funcAddr - regionInCurrentProcess.startAddress
-    let funcAddrInTargetProcess = regionInTargetProcess.startAddress + funcOffsetInRegion
-    return funcAddrInTargetProcess
-  }
-
-  static func findFuntionsInTarget(processId: ProcessIdentifier) -> TargetFunctionAddrs? {
-    guard let currentProcessMemoryMap = AndroidRemoteProcess.loadMemoryMap(getpid()) else {
-      return nil
-    }
-
-    guard let targetProcessMemoryMap = AndroidRemoteProcess.loadMemoryMap(processId) else {
-      return nil
-    }
-
-    guard let dlopenAddr = findFunctionInTarget(libName: "libc.so", funcName: "dlopen",
-                                                currentProcessMemoryMap: currentProcessMemoryMap,
-                                                targetProcessMemoryMap: targetProcessMemoryMap) else {
-      return nil
-    }
-    print("dlopen in target process is at \(String(dlopenAddr, radix: 16))")
-
-    guard let dlcloseAddr = findFunctionInTarget(libName: "libc.so", funcName: "dlclose",
-                                                 currentProcessMemoryMap: currentProcessMemoryMap,
-                                                 targetProcessMemoryMap: targetProcessMemoryMap) else {
-      return nil
-    }
-    print("dlclose in target process is at \(String(dlcloseAddr, radix: 16))")
-
-    guard let dlsymAddr = findFunctionInTarget(libName: "libc.so", funcName: "dlsym",
-                                               currentProcessMemoryMap: currentProcessMemoryMap,
-                                               targetProcessMemoryMap: targetProcessMemoryMap) else {
-      return nil
-    }
-    print("dlsym in target process is at \(String(dlsymAddr, radix: 16))")
-
-    guard let mmapAddr = findFunctionInTarget(libName: "libc.so", funcName: "mmap",
-                                               currentProcessMemoryMap: currentProcessMemoryMap,
-                                               targetProcessMemoryMap: targetProcessMemoryMap) else {
-      return nil
-    }
-    print("mmapAddr in target process is at \(String(mmapAddr, radix: 16))")
-
-    guard let munmapAddr = findFunctionInTarget(libName: "libc.so", funcName: "munmap",
-                                               currentProcessMemoryMap: currentProcessMemoryMap,
-                                               targetProcessMemoryMap: targetProcessMemoryMap) else {
-      return nil
-    }
-    print("munmapAddr in target process is at \(String(munmapAddr, radix: 16))")
-
-    return TargetFunctionAddrs(
-      dlopenAddr: dlopenAddr,
-      dlcloseAddr: dlcloseAddr,
-      dlsymAddr: dlsymAddr,
-      mmapAddr: mmapAddr,
-      munmapAddr: munmapAddr,
-    )
-  }
-
   init?(processId: ProcessIdentifier) {
     self.process = processId
     self.processIdentifier = processId
-
-    // TODO(andrurogerz): temporary testing out ptrace functionality
-    if !ptrace_attach(processId) {
-      print("ptrace_attach failed")
-      return nil
-    }
 
     let procfs_cmdline_path = "/proc/\(processId)/cmdline"
     guard let cmdline = try? String(contentsOfFile: procfs_cmdline_path,
@@ -305,48 +99,6 @@ internal final class AndroidRemoteProcess: RemoteProcess {
       return nil
     }
     self.processName = cmdline;
-
-    // TODO(andrurogerz): we should load the memory map as late as possible to
-    // avoid missing any new entries
-    guard let memoryMap = AndroidRemoteProcess.loadMemoryMap(processId) else {
-      return nil
-    }
-    self.memoryMap = memoryMap
-
-    print("target process \(processId) has \(memoryMap.count) regions in its memory map")
-
-    let thisProcessId = getpid()
-    if let myMemoryMap = AndroidRemoteProcess.loadMemoryMap(thisProcessId) {
-      print("this process \(thisProcessId) has \(myMemoryMap.count) regions in its memory map")
-    }
-
-    guard let context =
-        swift_reflection_createReflectionContextWithDataLayout(self.toOpaqueRef(),
-                                                               Self.QueryDataLayout,
-                                                               Self.Free,
-                                                               Self.ReadBytes,
-                                                               Self.GetStringLength,
-                                                               Self.GetSymbolAddress) else {
-      return nil
-    }
-    self.context = context
-
-    guard let targetFunctionAddrs = AndroidRemoteProcess.findFuntionsInTarget(processId: processId) else {
-      return nil
-    };
-
-    let remoteAddr = ptrace_remote_alloc(processId, targetFunctionAddrs.mmapAddr, 0x4000)
-    print("remote allocation at: \(String(remoteAddr, radix: 16))")
-
-    if !ptrace_remote_free(processId, targetFunctionAddrs.munmapAddr, remoteAddr, 0x4000) {
-      print("ptrace_remote_free failed")
-    }
-  }
-
-  deinit {
-    if !ptrace_detach(self.process) {
-      print("ptrace_detach failed")
-    }
   }
 
   func symbolicate(_ address: swift_addr_t) -> (module: String?, symbol: String?) {
@@ -354,9 +106,24 @@ internal final class AndroidRemoteProcess: RemoteProcess {
     return (nil, nil)
   }
 
-  func iterateHeap(_ body: (swift_addr_t, UInt64) -> Void) {
-    // TODO(andrurogerz)
-    return
+  internal func iterateHeap(_ body: (swift_addr_t, UInt64) -> Void) {
+    let callbackWrapper: @convention(c)
+      (UnsafeMutableRawPointer?, UInt64, UInt64) -> Void = { context, base, len in
+        print("heap item: \(context!) \(String(base, radix: 16)) \(len)")
+        let callback: (UInt64, UInt64) -> Void =
+            context!.assumingMemoryBound(to: ((UInt64, UInt64) -> Void).self).pointee
+        callback(base, len)
+      }
+
+    withoutActuallyEscaping(body) { unescapingCallback in
+      withUnsafePointer(to: unescapingCallback) { callbackContext in
+        if !heap_iterate(self.process,
+                         UnsafeMutableRawPointer(mutating: callbackContext),
+                         callbackWrapper) {
+          print("heap_iterate failed")
+        }
+      }
+    }
   }
 }
 
