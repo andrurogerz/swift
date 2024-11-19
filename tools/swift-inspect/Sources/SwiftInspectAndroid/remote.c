@@ -218,6 +218,22 @@ bool remote_malloc_iterate(pid_t pid, uintptr_t remote_base, size_t size,
   return true;
 }
 
+size_t remote_strlen(pid_t pid, uintptr_t remote_addr) {
+  uintptr_t strlen_addr = 0;
+  if (!remote_dlsym(pid, "libc.so", "strlen", &strlen_addr))
+    return false;
+
+  const unsigned long args[] = {
+    remote_addr,
+    0, 0, 0, 0, 0,
+  };
+  unsigned long result = 0;
+  if (!ptrace_call_remote_function(pid, strlen_addr, args, &result)) {
+    return 0;
+  }
+  return (size_t)result;
+}
+
 bool remote_read_memory(pid_t pid, uintptr_t remote_addr, void* data, size_t len) {
   struct iovec iov_local = {
     .iov_base = data,
@@ -229,10 +245,13 @@ bool remote_read_memory(pid_t pid, uintptr_t remote_addr, void* data, size_t len
     .iov_len = len,
   };
 
-  const size_t read = process_vm_readv(pid, &iov_local, 1, &iov_remote, 1, 0);
+  const ssize_t read = process_vm_readv(pid, &iov_local, 1, &iov_remote, 1, 0);
+  if (read == -1)
+    return false;
+
   if (len != read) {
-    fprintf(stderr, "only read %lu of %lu bytes from remote process %d\n",
-        read, len, pid);
+    fprintf(stderr, "only read %ld of %lu bytes from remote process %d at %016lx\n",
+        read, len, pid, remote_addr);
     return false;
   }
   return true;
@@ -249,10 +268,13 @@ bool remote_write_memory(pid_t pid, uintptr_t remote_addr, void* data, size_t le
     .iov_len = len,
   };
 
-  const size_t written = process_vm_writev(pid, &iov_local, 1, &iov_remote, 1, 0);
+  const ssize_t written = process_vm_writev(pid, &iov_local, 1, &iov_remote, 1, 0);
+  if (written == -1)
+    return false;
+
   if (len != written) {
-    fprintf(stderr, "only wrote %lu of %lu bytes to remote process %d\n",
-        written, len, pid);
+    fprintf(stderr, "only wrote %ld of %lu bytes to remote process %d at %016lx\n",
+        written, len, pid, remote_addr);
     return false;
   }
   return true;

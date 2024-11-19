@@ -93,27 +93,11 @@ static bool malloc_iterate_process_remote_entries(void* ctx) {
     if (!remote_read_memory(pid, remote_addr, &entry, sizeof(entry)))
       return false;
 
-    void* buffer = malloc(entry.size);
-    if (buffer == NULL) {
-      fprintf(stderr, "malloc(%lu) failed", entry.size);
-      return false;
-    }
-
-    if (!remote_read_memory(pid, entry.base, buffer, entry.size)) {
-      free(buffer);
-      return false;
-    }
-
-    printf("heap item (C): %016lx %016lx\n", entry.base, entry.size);
-
     // TODO: actually do something with the data we read from the remote
     context->callback(context->callback_context, entry.base, entry.size);
-
-    free(buffer);
   }
 
   if (remote_context.cur_idx > 0) {
-    printf("enumerated %lu heap items\n", remote_context.cur_idx);
     context->total_items += remote_context.cur_idx;
   }
 
@@ -136,9 +120,6 @@ static bool maps_iterate_remote_malloc_iterate(void* ctx, const maps_entry_t* en
       memcmp(entry->pathname, "[anon:GWP-ASan", sizeof("[anon:GWP-ASan") - 1) != 0)
     return true;
 
-  printf("enumerating heap items in region %016lx:%016lx %s %s...\n",
-    entry->start_addr, entry->end_addr, entry->permissions, entry->pathname);
-
   maps_iterate_remote_malloc_iterate_context_t *context = ctx;
   pid_t pid = context->pid;
   uintptr_t remote_data_addr = context->remote_data_addr;
@@ -150,8 +131,6 @@ static bool maps_iterate_remote_malloc_iterate(void* ctx, const maps_entry_t* en
   if (!malloc_iterate_process_remote_entries(context))
     return false;
 
-  printf("done enumerating region %016lx:%016lx %s %s!\n",
-    entry->start_addr, entry->end_addr, entry->permissions, entry->pathname);
   return true;
 }
 
@@ -192,7 +171,6 @@ bool heap_iterate(pid_t pid, void* callback_context, heap_iterate_callback_t cal
   if (!remote_malloc_disable(pid))
     goto exit;
 
-  printf("enumerating remote heap items...\n");
   maps_iterate_remote_malloc_iterate_context_t context = {
     .pid = pid,
     .callback = callback,
@@ -210,8 +188,6 @@ bool heap_iterate(pid_t pid, void* callback_context, heap_iterate_callback_t cal
 
   if (context.failed)
     goto exit;
-
-  printf("success! enumerated %lu heap items total\n", context.total_items);
 
   result = true;
 
