@@ -2,7 +2,7 @@ import Foundation
 import AndroidSystemHeaders
 
 protocol ElfSym {
-  static var size: Int { get }
+  static var symbolSize: Int { get }
   var name: UInt32 { get }
   var info: UInt8 { get }
   var other: UInt8 { get }
@@ -12,7 +12,7 @@ protocol ElfSym {
 }
 
 extension Elf32_Sym: ElfSym {
-  static var size: Int { MemoryLayout<Elf32_Sym>.size }
+  static var symbolSize: Int { MemoryLayout<Elf32_Sym>.size }
   var name: UInt32 { self.st_name }
   var info: UInt8 { self.st_info }
   var other: UInt8 { self.st_other }
@@ -22,7 +22,7 @@ extension Elf32_Sym: ElfSym {
 }
 
 extension Elf64_Sym: ElfSym {
-  static var size: Int { MemoryLayout<Elf64_Sym>.size }
+  static var symbolSize: Int { MemoryLayout<Elf64_Sym>.size }
   var name: UInt32 { self.st_name }
   var info: UInt8 { self.st_info }
   var other: UInt8 { self.st_other }

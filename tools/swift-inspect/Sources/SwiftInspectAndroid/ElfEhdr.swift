@@ -2,8 +2,7 @@ import Foundation
 import AndroidSystemHeaders
 
 protocol ElfEhdr {
-  static var size: Int { get }
-  init?(data: Data)
+  static var symbolSize: Int { get }
   var ident: [UInt8] { get }
   var type: UInt16 { get }
   var machine: UInt16 { get }
@@ -21,7 +20,7 @@ protocol ElfEhdr {
 }
 
 extension Elf64_Ehdr: ElfEhdr {
-  static var size: Int { MemoryLayout<Elf64_Ehdr>.size }
+  static var symbolSize: Int { MemoryLayout<Elf64_Ehdr>.size }
   var ident: [UInt8] { return withUnsafeBytes(of: self.e_ident) { Array($0) } }
   var type: UInt16 { self.e_type }
   var machine: UInt16 { self.e_machine }
@@ -36,15 +35,10 @@ extension Elf64_Ehdr: ElfEhdr {
   var shentsize: UInt16 { self.e_shentsize }
   var shnum: UInt16 { self.e_shnum }
   var shstrndx: UInt16 { self.e_shstrndx }
-
-  init?(data: Data) {
-    guard data.count >= Self.size else { return nil }
-    self = data.withUnsafeBytes { $0.load(as: Elf64_Ehdr.self) }
-  }
 }
 
 extension Elf32_Ehdr: ElfEhdr {
-  static var size: Int { MemoryLayout<Elf32_Ehdr>.size }
+  static var symbolSize: Int { MemoryLayout<Elf32_Ehdr>.size }
   var ident: [UInt8] { return withUnsafeBytes(of: self.e_ident) { Array($0) } }
   var type: UInt16 { self.e_type }
   var machine: UInt16 { self.e_machine }
@@ -59,9 +53,4 @@ extension Elf32_Ehdr: ElfEhdr {
   var shentsize: UInt16 { self.e_shentsize }
   var shnum: UInt16 { self.e_shnum }
   var shstrndx: UInt16 { self.e_shstrndx }
-
-  init?(data: Data) {
-    guard data.count >= Self.size else { return nil }
-    self = data.withUnsafeBytes { $0.load(as: Elf32_Ehdr.self) }
-  }
 }

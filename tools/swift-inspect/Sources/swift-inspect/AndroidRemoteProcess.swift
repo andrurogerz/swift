@@ -13,7 +13,7 @@
 #if os(Android)
 
 import Foundation
-import AndroidCLib // TODO(andrurogerz): just depend on SwiftInspectAndroid!
+import AndroidCLib // TODO(andrurogerz): just depend on SwiftInspectAndroid
 import SwiftInspectAndroid
 import SwiftRemoteMirror
 
@@ -21,10 +21,13 @@ internal final class AndroidRemoteProcess: RemoteProcess {
   public typealias ProcessIdentifier = pid_t
   public typealias ProcessHandle = SwiftInspectAndroid.Process
 
+
   public private(set) var process: ProcessHandle
   public private(set) var context: SwiftReflectionContextRef!
   public private(set) var processIdentifier: ProcessIdentifier
   public private(set) var processName: String = "<unknown process>"
+
+  let symbolCache: SwiftInspectAndroid.SymbolCache
 
   static var QueryDataLayout: QueryDataLayoutFunction {
     return { (context, type, _, output) in
@@ -97,20 +100,9 @@ internal final class AndroidRemoteProcess: RemoteProcess {
         return String(decoding: buffer, as: UTF8.self)
       }
 
-      guard let linkMap = try? SwiftInspectAndroid.LinkMap(for: process.process) else { return 0 }
-      for entry in linkMap.entries {
-        guard let filePath = entry.l_name else { continue }
-
-        // all symbols of interest are in the core runtime
-        guard filePath.hasSuffix("libswiftCore.so") else { continue }
-
-        guard let elfFile = try? ElfFile(filePath: filePath) else { continue }
-        guard let symbols = try? elfFile.loadSymbols() else { continue }
-
-        for (symbol, address) in symbols {
-          guard symbol.contains(name) else { continue }
-          let rebasedAddress = entry.rebase(address: address)
-          return swift_addr_t(rebasedAddress)
+      for (_, symbols) in process.symbolCache.symbolLookup {
+        if let address = symbols[name] {
+          return address.start
         }
       }
 
@@ -123,6 +115,9 @@ internal final class AndroidRemoteProcess: RemoteProcess {
 
     guard let process = try? SwiftInspectAndroid.Process(processId) else { return nil }
     self.process = process
+
+    guard let symbolCache = try? SwiftInspectAndroid.SymbolCache(for: process) else { return nil }
+    self.symbolCache = symbolCache
 
     let procfs_cmdline_path = "/proc/\(processId)/cmdline"
     guard let cmdline = try? String(contentsOfFile: procfs_cmdline_path,
@@ -144,9 +139,10 @@ internal final class AndroidRemoteProcess: RemoteProcess {
   }
 
   func symbolicate(_ address: swift_addr_t) -> (module: String?, symbol: String?) {
-    // TODO(andrurogerz)
-    print("TODO: symbolicate")
-    return (nil, nil)
+    guard let symbol = self.symbolCache.symbol(for: address) else {
+      return (nil, nil)
+    }
+    return (module: symbol.module, symbol: symbol.name)
   }
 
   internal func iterateHeap(_ body: (swift_addr_t, UInt64) -> Void) {

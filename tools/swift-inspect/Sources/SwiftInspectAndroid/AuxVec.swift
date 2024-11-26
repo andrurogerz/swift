@@ -1,13 +1,13 @@
 import Foundation
 import AndroidSystemHeaders
 
-public class AuxVec {
-  public enum Error: Swift.Error {
+class AuxVec {
+  enum Error: Swift.Error {
     case FileReadFailure(_ filePath: String)
   }
 
   // enum values must match the constants defined in usr/include/linux/auxv.h
-  public enum Tag: UInt64 {
+  enum Tag: UInt64 {
     case AT_NULL = 0
     case AT_IGNORE = 1
     case AT_EXECFD = 2
@@ -36,36 +36,38 @@ public class AuxVec {
     case AT_MINSIGSTKSZ = 51
   }
 
-  public let entries: [Tag: UInt64]
-
-  public init(for pid: pid_t) throws {
-    let filePath = "/proc/\(pid)/auxv"
+  static func load(for process: Process) throws -> [Tag: UInt64] {
+    let filePath = "/proc/\(process.pid)/auxv"
 
     let fileHandle = try FileHandle(forReadingFrom: URL(fileURLWithPath: filePath))
     defer { fileHandle.closeFile() }
 
-    // in a 64-bit processor, aux vector is an array of uint64_t pairs
-    let entrySize = MemoryLayout<UInt64>.size * 2
-
     var entries: [Tag: UInt64] = [:]
+
     guard let data = try fileHandle.readToEnd() else {
       throw Error.FileReadFailure(filePath)
     }
 
+    // Aux vecotr is an array of 4-byte pairs in a 32-bit process, or an array
+    // of 8-byte pairs in a 64-bit process
+    let itemSize = process.elfFile.isElf64 ? MemoryLayout<UInt64>.size : MemoryLayout<UInt32>.size
+    let entrySize = itemSize * 2
+
     for offset in stride(from: 0, to: data.count, by: entrySize) {
-      let tagRange = offset..<(offset + MemoryLayout<UInt64>.size)
+      let tagRange = offset..<(offset + itemSize)
       let rawTag = data[tagRange].withUnsafeBytes { $0.load(as: UInt64.self) }
 
       // ignore unknown tag types
       guard let tag = Tag(rawValue: rawTag) else { continue }
 
+      // auxvec is null-terminated
       if tag == .AT_NULL { break }
 
-      let valueRange = offset + MemoryLayout<UInt64>.size..<(offset + entrySize)
+      let valueRange = offset + itemSize..<(offset + entrySize)
       entries[tag] =
         data[valueRange].withUnsafeBytes { $0.load(as: UInt64.self) }
     }
 
-    self.entries = entries
+    return entries
   }
 }

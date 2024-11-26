@@ -2,7 +2,7 @@ import Foundation
 import AndroidSystemHeaders
 
 protocol ElfShdr {
-  static var size: Int { get }
+  static var symbolSize: Int { get }
   var name: UInt32 { get }
   var type: UInt32 { get }
   var flags: UInt64 { get }
@@ -16,7 +16,7 @@ protocol ElfShdr {
 }
 
 extension Elf32_Shdr: ElfShdr {
-  static var size: Int { MemoryLayout<Elf32_Shdr>.size }
+  static var symbolSize: Int { MemoryLayout<Elf32_Shdr>.size }
   var name: UInt32 { self.sh_name }
   var type: UInt32 { self.sh_type }
   var flags: UInt64 { UInt64(self.sh_flags) }
@@ -30,7 +30,7 @@ extension Elf32_Shdr: ElfShdr {
 }
 
 extension Elf64_Shdr: ElfShdr {
-  static var size: Int { MemoryLayout<Elf64_Shdr>.size }
+  static var symbolSize: Int { MemoryLayout<Elf64_Shdr>.size }
   var name: UInt32 { self.sh_name }
   var type: UInt32 { self.sh_type }
   var flags: UInt64 { self.sh_flags }
