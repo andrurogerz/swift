@@ -13,12 +13,13 @@
 #if os(Android)
 
 import Foundation
-import SwiftInspectAndroid 
+import AndroidCLib // TODO(andrurogerz): just depend on SwiftInspectAndroid!
+import SwiftInspectAndroid
 import SwiftRemoteMirror
 
 internal final class AndroidRemoteProcess: RemoteProcess {
   public typealias ProcessIdentifier = pid_t
-  public typealias ProcessHandle = pid_t
+  public typealias ProcessHandle = SwiftInspectAndroid.Process
 
   public private(set) var process: ProcessHandle
   public private(set) var context: SwiftReflectionContextRef!
@@ -66,7 +67,7 @@ internal final class AndroidRemoteProcess: RemoteProcess {
         return nil
       }
 
-      if !remote_read_memory(process.process, UInt(address), buffer, Int(size)) {
+      if !remote_read_memory(process.process.pid, UInt(address), buffer, Int(size)) {
         free(buffer)
         return nil
       }
@@ -80,7 +81,7 @@ internal final class AndroidRemoteProcess: RemoteProcess {
       let process: AndroidRemoteProcess =
         AndroidRemoteProcess.fromOpaque(context!)
 
-      let len = remote_strlen(process.process, UInt(address))
+      let len = remote_strlen(process.process.pid, UInt(address))
       return UInt64(len)
     }
   }
@@ -96,20 +97,32 @@ internal final class AndroidRemoteProcess: RemoteProcess {
         return String(decoding: buffer, as: UTF8.self)
       }
 
-      // TODO(andrurogerz): this implementation is not correct
-      var remote_addr: UInt = 0;
-      if !remote_dlsym(process.process, "libswiftCore.so", name, &remote_addr) {
-        print("remote_dlsym(\(name)) failed")
-        return 0
+      guard let linkMap = try? SwiftInspectAndroid.LinkMap(for: process.process) else { return 0 }
+      for entry in linkMap.entries {
+        guard let filePath = entry.l_name else { continue }
+
+        // all symbols of interest are in the core runtime
+        guard filePath.hasSuffix("libswiftCore.so") else { continue }
+
+        guard let elfFile = try? ElfFile(filePath: filePath) else { continue }
+        guard let symbols = try? elfFile.loadSymbols() else { continue }
+
+        for (symbol, address) in symbols {
+          guard symbol.contains(name) else { continue }
+          let rebasedAddress = entry.rebase(address: address)
+          return swift_addr_t(rebasedAddress)
+        }
       }
 
-      return swift_addr_t(remote_addr);
+      return 0
     }
   }
 
   init?(processId: ProcessIdentifier) {
-    self.process = processId
     self.processIdentifier = processId
+
+    guard let process = try? SwiftInspectAndroid.Process(processId) else { return nil }
+    self.process = process
 
     let procfs_cmdline_path = "/proc/\(processId)/cmdline"
     guard let cmdline = try? String(contentsOfFile: procfs_cmdline_path,
@@ -157,7 +170,7 @@ internal final class AndroidRemoteProcess: RemoteProcess {
 
     withUnsafeMutablePointer(to: &snapshot) { pointer in
       let context = UnsafeMutableRawPointer(pointer)
-      if !heap_iterate(self.process, context, HeapSnapshot.callback) {
+      if !heap_iterate(self.process.pid, context, HeapSnapshot.callback) {
         print("heap_iterate failed")
       }
     }
