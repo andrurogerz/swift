@@ -21,7 +21,6 @@ internal final class AndroidRemoteProcess: RemoteProcess {
   public typealias ProcessIdentifier = pid_t
   public typealias ProcessHandle = SwiftInspectAndroid.Process
 
-
   public private(set) var process: ProcessHandle
   public private(set) var context: SwiftReflectionContextRef!
   public private(set) var processIdentifier: ProcessIdentifier
@@ -63,16 +62,15 @@ internal final class AndroidRemoteProcess: RemoteProcess {
 
   static var ReadBytes: ReadBytesFunction {
     return { (context, address, size, _) in
-      let process: AndroidRemoteProcess =
-        AndroidRemoteProcess.fromOpaque(context!)
+      let process: AndroidRemoteProcess = AndroidRemoteProcess.fromOpaque(context!)
 
-      guard let buffer = malloc(Int(size)) else {
+      guard let byteArray: [UInt8] = try? process.process.readArray(address: address, upToCount: UInt(size)),
+            let buffer = malloc(byteArray.count) else {
         return nil
       }
 
-      if !remote_read_memory(process.process.pid, UInt(address), buffer, Int(size)) {
-        free(buffer)
-        return nil
+      byteArray.withUnsafeBytes {
+        buffer.copyMemory(from: $0.baseAddress!, byteCount: byteArray.count)
       }
 
       return UnsafeRawPointer(buffer)
@@ -81,11 +79,14 @@ internal final class AndroidRemoteProcess: RemoteProcess {
 
   static var GetStringLength: GetStringLengthFunction {
     return { (context, address) in
-      let process: AndroidRemoteProcess =
-        AndroidRemoteProcess.fromOpaque(context!)
+      let process: AndroidRemoteProcess = AndroidRemoteProcess.fromOpaque(context!)
 
-      let len = remote_strlen(process.process.pid, UInt(address))
-      return UInt64(len)
+      guard let string = try? process.process.readString(address: address),
+            let len = UInt64(exactly: string.count) else {
+          return 0
+      }
+
+      return len
     }
   }
 
@@ -166,7 +167,7 @@ internal final class AndroidRemoteProcess: RemoteProcess {
 
     withUnsafeMutablePointer(to: &snapshot) { pointer in
       let context = UnsafeMutableRawPointer(pointer)
-      if !heap_iterate(self.process.pid, context, HeapSnapshot.callback) {
+      if !heap_iterate(self.processIdentifier, context, HeapSnapshot.callback) {
         print("heap_iterate failed")
       }
     }

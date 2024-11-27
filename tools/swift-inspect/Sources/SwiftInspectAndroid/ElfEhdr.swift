@@ -1,7 +1,7 @@
 import Foundation
 import AndroidSystemHeaders
 
-protocol ElfEhdr {
+internal protocol ElfEhdr {
   static var symbolSize: Int { get }
   var ident: [UInt8] { get }
   var type: UInt16 { get }

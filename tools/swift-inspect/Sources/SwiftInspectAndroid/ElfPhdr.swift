@@ -1,7 +1,7 @@
 import Foundation
 import AndroidSystemHeaders
 
-protocol ElfPhdr {
+internal protocol ElfPhdr {
   static var symbolSize: Int { get }
   var type: UInt32 { get }
   var offset: UInt64 { get }

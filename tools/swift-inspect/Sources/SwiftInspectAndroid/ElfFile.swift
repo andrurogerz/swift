@@ -1,7 +1,7 @@
 import Foundation
 import AndroidSystemHeaders
 
-class ElfFile {
+public class ElfFile {
   enum Error: Swift.Error {
     case FileOpenFailure(_ filePath: String)
     case FileReadFailure(_ filePath: String, offset: UInt64, size: UInt64)

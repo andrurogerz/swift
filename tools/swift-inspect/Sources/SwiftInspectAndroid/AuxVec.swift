@@ -1,7 +1,7 @@
 import Foundation
 import AndroidSystemHeaders
 
-class AuxVec {
+internal class AuxVec {
   enum Error: Swift.Error {
     case FileReadFailure(_ filePath: String)
   }

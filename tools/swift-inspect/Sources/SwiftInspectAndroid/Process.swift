@@ -8,7 +8,7 @@ public class Process {
   }
 
   public let pid: pid_t
-  let elfFile: ElfFile
+  public let elfFile: ElfFile
 
   public init(_ pid: pid_t) throws {
     self.pid = pid
@@ -17,13 +17,13 @@ public class Process {
   }
 
   // read a struct of type T from the target process
-  func readStruct<T>(address: UInt64) throws -> T {
+  public func readStruct<T>(address: UInt64) throws -> T {
     let result: [T] = try readArray(address: address, upToCount: 1)
     return result.first!
   }
 
   // read a null-terminated string from the target process
-  func readString(address: UInt64) throws -> String {
+  public func readString(address: UInt64) throws -> String {
     var accumulatedBytes = [UInt8]()
     var readAddress: UInt64 = address
     let chunkSize: UInt = 1 * 1024 * 1024
@@ -48,7 +48,7 @@ public class Process {
   }
 
   // read an array of type T elements from the target process
-  func readArray<T>(address: UInt64, upToCount: UInt) throws -> [T] {
+  public func readArray<T>(address: UInt64, upToCount: UInt) throws -> [T] {
     let maxSize = upToCount * UInt(MemoryLayout<T>.size)
     var local = iovec(
       iov_base: UnsafeMutableRawPointer.allocate(

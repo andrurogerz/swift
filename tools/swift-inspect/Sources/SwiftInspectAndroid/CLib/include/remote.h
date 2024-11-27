@@ -30,7 +30,6 @@ bool remote_malloc_enable(pid_t pid);
 bool remote_malloc_iterate(pid_t pid, uintptr_t remote_base, size_t size,
     uintptr_t remote_callback_addr, uintptr_t remote_context_addr,
     trap_callback_t trap_callback, void* trap_callback_context);
-size_t remote_strlen(pid_t pid, uintptr_t remote_addr);
 bool remote_read_memory(
     pid_t pid, uintptr_t remote_addr, void* data, size_t len);
 bool remote_write_memory(

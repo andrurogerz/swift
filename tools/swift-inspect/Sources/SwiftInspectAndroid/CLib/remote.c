@@ -212,26 +212,10 @@ bool remote_malloc_iterate(pid_t pid, uintptr_t remote_base, size_t size,
   unsigned long result = 0;
   if (!ptrace_call_remote_function_with_trap_callback(pid, malloc_iterate_addr,
         args, &result, trap_callback, trap_callback_context)) {
-    fprintf(stderr, "failed malloc_iterate_addr in remote process %d\n", pid);
+    fprintf(stderr, "failed malloc_iterate in remote process %d\n", pid);
     return false;
   }
   return true;
-}
-
-size_t remote_strlen(pid_t pid, uintptr_t remote_addr) {
-  uintptr_t strlen_addr = 0;
-  if (!remote_dlsym(pid, "libc.so", "strlen", &strlen_addr))
-    return false;
-
-  const unsigned long args[] = {
-    remote_addr,
-    0, 0, 0, 0, 0,
-  };
-  unsigned long result = 0;
-  if (!ptrace_call_remote_function(pid, strlen_addr, args, &result)) {
-    return 0;
-  }
-  return (size_t)result;
 }
 
 bool remote_read_memory(pid_t pid, uintptr_t remote_addr, void* data, size_t len) {

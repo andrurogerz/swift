@@ -1,7 +1,7 @@
 import Foundation
 import AndroidSystemHeaders
 
-protocol ElfSym {
+internal protocol ElfSym {
   static var symbolSize: Int { get }
   var name: UInt32 { get }
   var info: UInt8 { get }
