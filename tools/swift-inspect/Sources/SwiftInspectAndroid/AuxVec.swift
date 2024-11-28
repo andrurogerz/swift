@@ -33,6 +33,7 @@ internal class AuxVec {
     case AT_RSEQ_FEATURE_SIZE = 27
     case AT_RSEQ_ALIGN = 28
     case AT_EXECFN = 31
+    case AT_SYSINFO_EHDR = 33
     case AT_MINSIGSTKSZ = 51
   }
 
@@ -42,30 +43,21 @@ internal class AuxVec {
     let fileHandle = try FileHandle(forReadingFrom: URL(fileURLWithPath: filePath))
     defer { fileHandle.closeFile() }
 
-    var entries: [Tag: UInt64] = [:]
-
     guard let data = try fileHandle.readToEnd() else {
       throw Error.FileReadFailure(filePath)
     }
 
-    // Aux vecotr is an array of 4-byte pairs in a 32-bit process, or an array
-    // of 8-byte pairs in a 64-bit process
-    let itemSize = process.elfFile.isElf64 ? MemoryLayout<UInt64>.size : MemoryLayout<UInt32>.size
-    let entrySize = itemSize * 2
+    // aux vector is an array of 8-byte pairs in a 64-bit process
+    assert(process.elfFile.isElf64, "only 64-bit processes are supported")
+    let auxVec: [(UInt64, UInt64)] = data.withUnsafeBytes {
+      let count = $0.count / MemoryLayout<(UInt64, UInt64)>.stride
+      return Array($0.bindMemory(to: (UInt64, UInt64).self)[..<count])
+    }
 
-    for offset in stride(from: 0, to: data.count, by: entrySize) {
-      let tagRange = offset..<(offset + itemSize)
-      let rawTag = data[tagRange].withUnsafeBytes { $0.load(as: UInt64.self) }
-
-      // ignore unknown tag types
+    var entries: [Tag: UInt64] = [:]
+    for (rawTag, value) in auxVec {
       guard let tag = Tag(rawValue: rawTag) else { continue }
-
-      // auxvec is null-terminated
-      if tag == .AT_NULL { break }
-
-      let valueRange = offset + itemSize..<(offset + entrySize)
-      entries[tag] =
-        data[valueRange].withUnsafeBytes { $0.load(as: UInt64.self) }
+      entries[tag] = value
     }
 
     return entries
