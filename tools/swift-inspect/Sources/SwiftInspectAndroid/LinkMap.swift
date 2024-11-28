@@ -40,8 +40,7 @@ class LinkMap {
     var baseLoadSegment: ElfPhdr? = nil
     for i in 0...phdrCount {
       let address: UInt64 = phdrAddr + i * phdrSize
-      let phdr: ElfPhdr =
-        isElf64
+      let phdr: ElfPhdr = isElf64
         ? try process.readStruct(address: address) as Elf64_Phdr
         : try process.readStruct(address: address) as Elf32_Phdr
 
@@ -87,8 +86,7 @@ class LinkMap {
     let dynamicEntryCount = UInt(dynamicSegment.memsz / UInt64(entrySize))
     for i in 0...dynamicEntryCount {
       let address: UInt64 = dynamicSegmentAddr + UInt64(i) * UInt64(entrySize)
-      let dyn: ElfDyn =
-        isElf64
+      let dyn: ElfDyn = isElf64
         ? try process.readStruct(address: address) as Elf64_Dyn
         : try process.readStruct(address: address) as Elf32_Dyn
 

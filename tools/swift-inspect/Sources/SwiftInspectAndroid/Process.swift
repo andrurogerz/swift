@@ -26,7 +26,7 @@ public class Process {
   public func readString(address: UInt64) throws -> String {
     var accumulatedBytes = [UInt8]()
     var readAddress: UInt64 = address
-    let chunkSize: UInt = 1 * 1024 * 1024
+    let chunkSize: UInt = 64
 
     while true {
       let chunk: [UInt8] = try readArray(address: readAddress, upToCount: chunkSize)
