@@ -36,9 +36,9 @@ _Static_assert(
     "entries field at unexpected offset");
 
 #if defined(__aarch64__) || defined(__ARM64__) || defined(_M_ARM64)
-#define DEBUG_BREAK() asm("brk #0x0")
+#define DEBUG_BREAK() asm("brk #0x0; nop")
 #elif defined(_M_X64) || defined(__amd64__) || defined(__x86_64__) || defined(_M_AMD64)
-#define DEBUG_BREAK() asm("int3")
+#define DEBUG_BREAK() asm("int3; nop")
 #else
 #error("only aarch64 and x86_64 are supported")
 #endif
@@ -48,13 +48,11 @@ _Static_assert(
 // and maintainable.
 static void remote_callback_start(unsigned long base, unsigned long size, void *arg) {
   volatile remote_callback_context_t* context = (remote_callback_context_t*)arg;
-  uint64_t cur_idx = context->cur_idx;
-  while (cur_idx >= context->max_idx) {
+  while (context->cur_idx >= context->max_idx) {
     DEBUG_BREAK();
-    cur_idx = context->cur_idx;
   }
-  context->entries[cur_idx].base = base;
-  context->entries[cur_idx].size = size;
+  context->entries[context->cur_idx].base = base;
+  context->entries[context->cur_idx].size = size;
   context->cur_idx += 1;
 }
 

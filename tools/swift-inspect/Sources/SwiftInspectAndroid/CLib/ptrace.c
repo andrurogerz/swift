@@ -47,7 +47,7 @@ unsigned long registers_retval(const register_set_t* registers) {
 #elif defined(_M_X64) || defined(__amd64__) || defined(__x86_64__) || defined(_M_AMD64)
 typedef struct pt_regs register_set_t;
 
-inline
+static inline
 void registers_setup_call(register_set_t* registers,
     const unsigned long args[6], unsigned long func_addr,
     unsigned long return_addr) {
@@ -64,13 +64,13 @@ void registers_setup_call(register_set_t* registers,
   // the stack
 }
 
-inline
+static inline
 unsigned long registers_stack_reserve(register_set_t* registers, size_t bytes) {
   registers->rsp -= sizeof(bytes);
   return registers->rsp;
 }
 
-inline
+static inline
 unsigned long registers_retval(const register_set_t* registers) {
   return registers->rax;
 }
