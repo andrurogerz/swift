@@ -22,19 +22,6 @@
 #include "remote.h"
 #include "proc.h"
 
-typedef struct {
-  uint64_t max_idx;
-  uint64_t cur_idx;
-  struct {
-    uint64_t base;
-    uint64_t size;
-  } entries[];
-} remote_callback_context_t;
-
-_Static_assert(
-    offsetof(remote_callback_context_t, entries) == 2 * sizeof(uint64_t),
-    "entries field at unexpected offset");
-
 #if defined(__aarch64__) || defined(__ARM64__) || defined(_M_ARM64)
 #define DEBUG_BREAK() asm("brk #0x0; nop")
 #elif defined(_M_X64) || defined(__amd64__) || defined(__x86_64__) || defined(_M_AMD64)
@@ -43,17 +30,53 @@ _Static_assert(
 #error("only aarch64 and x86_64 are supported")
 #endif
 
+/* We allocate a buffer in the remote process that it populates with metadata
+ * describing each heap entry it enumerates. We then read the contents of the
+ * buffer, and individual heap entry contents, using process_vm_readv.
+ * 
+ * The buffer is interpreted as an array of 8-byte pairs. The first pair
+ * contains metadata describing the buffer itself: max valid index (e.g. size of
+ * the buffer) and next index (e.g. write cursor/position). Each subsequent pair
+ * describes the address and length of a heap entry in the remote process.
+ * 
+ * ------------
+ * | uint64_t | max valid index (e.g. sizeof(buffer) / sizeof(uint64_t))
+ * ------------
+ * | uint64_t | next free index (starts at 2)
+ * ------------
+ * | uint64_t | heap item 1 address
+ * ------------ 
+ * | uint64_t | heap item 1 size
+ * ------------
+ * | uint64_t | heap item 2 address
+ * ------------ 
+ * | uint64_t | heap item 2 size
+ * ------------
+ * | uint64_t | ...
+ * ------------ 
+ * | uint64_t | ...
+ * ------------
+ * | uint64_t | heap item N address
+ * ------------ 
+ * | uint64_t | heap item N size
+ * ------------
+ */
+
+#define MAX_VALID_IDX 0
+#define NEXT_FREE_IDX 1
+#define HEADER_SIZE 2
+#define ENTRY_SIZE  2
+
 // NOTE: this function cannot call any other functions and must only use
 // relative branches. We could inline assembly instead, but C is more reabable
 // and maintainable.
 static void remote_callback_start(unsigned long base, unsigned long size, void *arg) {
-  volatile remote_callback_context_t* context = (remote_callback_context_t*)arg;
-  while (context->cur_idx >= context->max_idx) {
+  volatile uint64_t *data = (uint64_t*)arg;
+  while (data[NEXT_FREE_IDX] >= data[MAX_VALID_IDX]) {
     DEBUG_BREAK();
   }
-  context->entries[context->cur_idx].base = base;
-  context->entries[context->cur_idx].size = size;
-  context->cur_idx += 1;
+  data[data[NEXT_FREE_IDX]++] = base;
+  data[data[NEXT_FREE_IDX]++] = size;
 }
 
 // NOTE: this function is here to mark the end of remote_callback_start and is never
@@ -75,33 +98,31 @@ static bool malloc_iterate_process_remote_entries(void* ctx) {
   const pid_t pid = context->pid;
   const uintptr_t remote_data_addr = context->remote_data_addr;
 
-  remote_callback_context_t remote_context = {0};
-  if (!remote_read_memory(pid, remote_data_addr, &remote_context, sizeof(remote_context)))
+  uint64_t remote_header[HEADER_SIZE] = {0};
+  if (!remote_read_memory(pid, remote_data_addr, &remote_header, sizeof(remote_header)))
     return false;
 
-  for (size_t idx = 0; idx < remote_context.cur_idx; idx++) {
-    struct {
-      uint64_t base;
-      uint64_t size;
-    } entry = {0};
+  if (remote_header[NEXT_FREE_IDX] > remote_header[MAX_VALID_IDX])
+    return false; // should never happen
+
+  for (size_t idx = HEADER_SIZE; idx < remote_header[NEXT_FREE_IDX]; idx += ENTRY_SIZE) {
+    uint64_t remote_entry[ENTRY_SIZE] = {0};
 
     // TODO: read the remote in page-size chunks rather than one entry at a time
-    uintptr_t remote_addr = remote_data_addr +
-        offsetof(remote_callback_context_t, entries) + (sizeof(entry) * idx);
-    if (!remote_read_memory(pid, remote_addr, &entry, sizeof(entry)))
+    uintptr_t remote_addr = remote_data_addr + (sizeof(uint64_t) * idx);
+    if (!remote_read_memory(pid, remote_addr, &remote_entry, sizeof(remote_entry)))
       return false;
 
-    // TODO: actually do something with the data we read from the remote
-    context->callback(context->callback_context, entry.base, entry.size);
+    context->callback(context->callback_context, remote_entry[0], remote_entry[1]);
   }
 
-  if (remote_context.cur_idx > 0) {
-    context->total_items += remote_context.cur_idx;
+  if (remote_header[NEXT_FREE_IDX] > HEADER_SIZE) {
+    context->total_items += (remote_header[NEXT_FREE_IDX] - HEADER_SIZE) / ENTRY_SIZE;
   }
 
-  // reset the cursor to allow more enumeration
-  remote_context.cur_idx = 0;
-  if (!remote_write_memory(pid, remote_data_addr, &remote_context, sizeof(remote_context)))
+  // reset the cursor to reuse the buffer for additional enumeration
+  remote_header[NEXT_FREE_IDX] = HEADER_SIZE;
+  if (!remote_write_memory(pid, remote_data_addr, &remote_header, sizeof(remote_header)))
     return false;
 
   return true;
@@ -141,14 +162,12 @@ bool heap_iterate(pid_t pid, void* callback_context, heap_iterate_callback_t cal
         MAP_ANON | MAP_PRIVATE, &remote_data_addr))
     goto exit;
 
-  remote_callback_context_t remote_context = {
-    .cur_idx = 0,
-    .max_idx = (remote_data_size - sizeof(remote_context)) /
-      sizeof(remote_context.entries[0]),
-  };
+  uint64_t remote_header[HEADER_SIZE];
+  remote_header[NEXT_FREE_IDX] = HEADER_SIZE;
+  remote_header[MAX_VALID_IDX] = remote_data_size / sizeof(uint64_t);
 
-  if (!remote_write_memory(pid, remote_data_addr, &remote_context,
-        sizeof(remote_context)))
+  if (!remote_write_memory(pid, remote_data_addr, &remote_header,
+        sizeof(remote_header)))
     goto exit;
 
   const size_t remote_callback_len =
