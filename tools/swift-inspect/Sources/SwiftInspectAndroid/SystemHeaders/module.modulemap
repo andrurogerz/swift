@@ -1,8 +1,11 @@
 module AndroidSystemHeaders {
   header "auxvec.h"
   header "elf.h"
+  header "errno.h"
   header "link.h"
+  header "ptrace.h"
   header "uio.h"
   header "unistd.h"
+  header "wait.h"
   export *
 }
