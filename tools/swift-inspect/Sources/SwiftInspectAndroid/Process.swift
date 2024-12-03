@@ -6,9 +6,6 @@ public class Process {
     case ProcessVmReadFailure(pid: pid_t, address: UInt64, size: UInt64)
     case ProcessVmWriteFailure(pid: pid_t, address: UInt64, size: UInt64)
     case InvalidString(address: UInt64)
-    case IllegalArgument(description: String)
-    case WaitPidFailure(pid: pid_t, errno: Int32 = get_errno())
-    case UnexpectedWaitStatus(pid: pid_t, status: Int32, sigInfo: siginfo_t? = nil)
   }
 
   public let pid: pid_t
@@ -77,70 +74,5 @@ public class Process {
     guard bytesWritten == len else {
       throw Error.ProcessVmWriteFailure(pid: self.pid, address: remoteAddr, size: UInt64(len))
     }
-  }
-
-  public func callRemoteFunction(at address: UInt64, with args: [UInt64] = [],
-      onTrap callback: ((_ ptrace: PTrace) throws -> Void)? = nil) throws -> UInt64 {
-
-    guard args.count <= 6 else {
-      throw Error.IllegalArgument(description: "max of 6 arguments allowed")
-    }
-
-    let ptrace = try PTrace(process: self.pid)
-    let origRegs = try ptrace.getRegSet()
-    defer {
-      _ = try? ptrace.setRegSet(regSet: origRegs)
-    }
-
-    // Set the return address to 0. This forces the function to return to 0 on
-    // completion, resulting in a SIGSEGV with address 0 which will interrupt
-    // the process and notify us (the tracer) via waitpid(). At that point, we
-    // will restore the original state and continue the process.
-    let returnAddr: UInt64 = 0
-
-    var newRegs = origRegs.setupCall(funcAddr: address, args: args, returnAddr: returnAddr)
-
-#if arch(x86_64)
-    // push the return address onto the stack on x86_64
-    let stackAddr = newRegs.stackReserve(byteCount: UInt(MemoryLayout<UInt64>.size))
-    try ptrace.pokeData(addr: stackAddr, value: returnAddr)
-#endif
-
-    try ptrace.setRegSet(regSet: newRegs)
-    try ptrace.cont()
-
-    var status: Int32 = 0
-    while true {
-      let result = waitpid(self.pid, &status, 0)
-      if result == -1 {
-        if get_errno() == EINTR { continue }
-        throw Error.WaitPidFailure(pid: self.pid) 
-      }
-
-      if wIfExited(status) || wIfSignaled(status) {
-        throw Error.UnexpectedWaitStatus(pid: self.pid, status: status) 
-      }
-
-      if wIfStopped(status) {
-        guard wStopSig(status) == SIGTRAP, let callback = callback else { break }
-
-        // give the caller the opportunity to handle SIGTRAP
-        try callback(ptrace)
-        try ptrace.cont()
-        continue
-      }
-
-      print("what?")
-    }
-
-    let sigInfo = try ptrace.getSigInfo()
-    newRegs = try ptrace.getRegSet()
-
-    guard wStopSig(status) == SIGSEGV, siginfo_si_addr(sigInfo) == nil else {
-      print("WSTOPSIG(status):\(wStopSig(status)), si_addr:\(siginfo_si_addr(sigInfo)!)")
-      throw Error.UnexpectedWaitStatus(pid: self.pid, status: status, sigInfo: sigInfo)
-    }
-
-    return UInt64(newRegs.returnValue())
   }
 }
