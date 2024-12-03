@@ -23,6 +23,9 @@ extern "C" {
 typedef void (*heap_iterate_callback_t)(void* context, uint64_t base, uint64_t len);
 bool heap_iterate(pid_t pid, void* callback_context, heap_iterate_callback_t callback);
 
+void* heap_callback_start();
+size_t heap_callback_len();
+
 #if defined(__cplusplus)
 }
 #endif

@@ -29,17 +29,20 @@ public class ElfFile {
     guard let identData = try file.read(upToCount: identLen),
       identData.count == identLen
     else {
+      file.closeFile()
       throw Error.FileReadFailure(filePath, offset: 0, size: UInt64(identLen))
     }
 
     let identMagic = String(bytes: identData.prefix(Int(SELFMAG)), encoding: .utf8)
     guard identMagic == ELFMAG else {
+      file.closeFile()
       throw Error.FileNotElfFormat(filePath)
     }
 
     let identClass = identData[Int(EI_CLASS)]
     let isElf64 = identClass == ELFCLASS64
     guard isElf64 || identClass == ELFCLASS32 else {
+      file.closeFile()
       throw Error.MalformedElfFile(filePath, description: "unsupported ELFCLASS: \(identClass)")
     }
     self.isElf64 = isElf64
@@ -49,6 +52,7 @@ public class ElfFile {
     guard let ehdrData = try file.read(upToCount: ehdrSize),
       ehdrData.count == ehdrSize
     else {
+      file.closeFile()
       throw Error.FileReadFailure(filePath, offset: 0, size: UInt64(ehdrSize))
     }
 
@@ -57,6 +61,10 @@ public class ElfFile {
     } else {
       self.ehdr = ehdrData.withUnsafeBytes { $0.load(as: Elf32_Ehdr.self) as ElfEhdr }
     }
+  }
+
+  deinit {
+    file.closeFile()
   }
 
   // reads and returns the Elf32_Shdr or Elf64_Shdr at the specified index

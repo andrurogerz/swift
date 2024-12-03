@@ -14,6 +14,7 @@
 
 import Foundation
 import AndroidCLib // TODO(andrurogerz): just depend on SwiftInspectAndroid
+import AndroidSystemHeaders 
 import SwiftInspectAndroid
 import SwiftRemoteMirror
 
@@ -27,6 +28,7 @@ internal final class AndroidRemoteProcess: RemoteProcess {
   public private(set) var processName: String = "<unknown process>"
 
   let symbolCache: SwiftInspectAndroid.SymbolCache
+  let memoryMap: [ProcFs.MemoryMapEntry]
 
   static var QueryDataLayout: QueryDataLayoutFunction {
     return { (context, type, _, output) in
@@ -59,7 +61,6 @@ internal final class AndroidRemoteProcess: RemoteProcess {
       free(UnsafeMutableRawPointer(mutating: bytes))
     }
   }
-
   static var ReadBytes: ReadBytesFunction {
     return { (context, address, size, _) in
       let process: AndroidRemoteProcess = AndroidRemoteProcess.fromOpaque(context!)
@@ -101,13 +102,8 @@ internal final class AndroidRemoteProcess: RemoteProcess {
         return String(decoding: buffer, as: UTF8.self)
       }
 
-      for (_, symbols) in process.symbolCache.symbolLookup {
-        if let address = symbols[name] {
-          return address.start
-        }
-      }
-
-      return 0
+      guard let (startAddr, _) = try? process.symbolCache.address(of: name) else { return 0 }
+      return startAddr
     }
   }
 
@@ -116,6 +112,9 @@ internal final class AndroidRemoteProcess: RemoteProcess {
 
     guard let process = try? SwiftInspectAndroid.Process(processId) else { return nil }
     self.process = process
+
+    guard let memoryMap = try? SwiftInspectAndroid.ProcFs.loadMaps(for: processId) else { return nil }
+    self.memoryMap = memoryMap
 
     guard let symbolCache = try? SwiftInspectAndroid.SymbolCache(for: process) else { return nil }
     self.symbolCache = symbolCache
@@ -140,41 +139,174 @@ internal final class AndroidRemoteProcess: RemoteProcess {
   }
 
   func symbolicate(_ address: swift_addr_t) -> (module: String?, symbol: String?) {
-    guard let symbol = self.symbolCache.symbol(for: address) else {
+    guard let symbol = try? self.symbolCache.symbol(for: address) else {
       return (nil, nil)
     }
     return (module: symbol.module, symbol: symbol.name)
   }
 
   internal func iterateHeap(_ body: (swift_addr_t, UInt64) -> Void) {
-    struct HeapSnapshot {
-      struct Allocation {
-        var base: UInt64
-        var len: UInt64
+    for entry in self.memoryMap {
+      guard let name = entry.pathname,
+        name == "[anon:libc_malloc]" ||
+        name.hasPrefix("[anon:scudo:") ||
+        name.hasPrefix("[anon:GWP-ASan") else { continue }
+
+      print("\(name) \(String(entry.startAddr, radix:16)):\(String(entry.endAddr, radix:16))")
+
+      // collect all of the allocations in this heap region
+      let allocations: [(base: swift_addr_t, len: UInt64)]
+      do {
+        allocations = try self.iterateHeapRegion(startAddr: entry.startAddr, endAddr: entry.endAddr)
+      } catch {
+        print("failed iterating remote heap: \(error)")
+        return
       }
 
-      var items: [Allocation] = []
+      for alloc in allocations {
+        body(alloc.base, alloc.len)
+      }
+    }
+  }
 
-      static let callback: @convention(c)
-        (UnsafeMutableRawPointer?, UInt64, UInt64) -> Void = { context, base, len in
-          guard let context = context else { return }
-          var snapshotPointer = context.assumingMemoryBound(to: HeapSnapshot.self)
-          snapshotPointer.pointee.items.append(HeapSnapshot.Allocation(base: base, len: len))
-        }
+  internal func initHeapMetadata(dataAddr: UInt64, dataLen: UInt64) throws {
+    // (re-)initialize the metadata region in the remote process
+    let startEntry: UInt64 = 2 // first two entries are metadtata
+    let maxEntries: UInt64 = dataLen / UInt64(MemoryLayout<UInt64>.stride)
+    let header: (UInt64, UInt64) = (maxEntries, startEntry)
+    let headerLen = UInt(MemoryLayout.size(ofValue: header))
+    try withUnsafePointer(to: header) {
+      try self.process.writeMem(remoteAddr: dataAddr, localAddr: $0, len: headerLen)
+    }
+  }
+
+  internal func processHeapAllocations(dataAddr: UInt64, dataLen: UInt64)
+      throws -> [(base: swift_addr_t, len: UInt64)] {
+    let count = UInt(dataLen) / UInt(MemoryLayout<UInt64>.size)
+    let data: [UInt64] = try self.process.readArray(address: dataAddr, upToCount: count)
+    print("\(data[0]),\(data[1])")
+    let startEntry = 2
+    let entryCount = Int(data[1])
+    var items: [(base: swift_addr_t, len: UInt64)] = []
+    for idx in stride(from: startEntry, to: entryCount, by: 2) {
+      items.append((base: data[idx], len: data[idx + 1]))
     }
 
-    var snapshot: HeapSnapshot = HeapSnapshot()
+    return items
+  }
 
-    withUnsafeMutablePointer(to: &snapshot) { pointer in
-      let context = UnsafeMutableRawPointer(pointer)
-      if !heap_iterate(self.processIdentifier, context, HeapSnapshot.callback) {
-        print("heap_iterate failed")
+  internal func iterateHeapRegion(startAddr: UInt64, endAddr: UInt64)
+      throws -> [(base: swift_addr_t, len: UInt64)] {
+    let (mmapAddr, _) = try symbolCache.address(of: "mmap")
+    let (munmapAddr, _) = try symbolCache.address(of: "munmap")
+    let (mallocDisableAddr, _) = try symbolCache.address(of: "malloc_disable")
+    let (mallocEnableAddr, _) = try symbolCache.address(of: "malloc_enable")
+    let (mallocIterateAddr, _) = try symbolCache.address(of: "malloc_iterate")
+
+    /* We allocate a page-sized buffer in the remote process that malloc_iterate
+     * populates with metadata describing each heap entry it enumerates.
+     * 
+     * The buffer is interpreted as an array of 8-byte pairs. The first pair
+     * contains metadata describing the buffer itself: max valid index (e.g.
+     * the size of the buffer) and next index (e.g. write cursor/position).
+     * Each subsequent pair describes the address and length of a heap entry in
+     * the remote process.
+     * 
+     * ------------
+     * | uint64_t | max valid index (e.g. sizeof(buffer) / sizeof(uint64_t))
+     * ------------
+     * | uint64_t | next free index (starts at 2)
+     * ------------
+     * | uint64_t | heap item 1 address
+     * ------------ 
+     * | uint64_t | heap item 1 size
+     * ------------
+     * | uint64_t | heap item 2 address
+     * ------------ 
+     * | uint64_t | heap item 2 size
+     * ------------
+     * | uint64_t | ...
+     * ------------ 
+     * | uint64_t | ...
+     * ------------
+     * | uint64_t | heap item N address
+     * ------------ 
+     * | uint64_t | heap item N size
+     * ------------
+     */
+    let dataLen = UInt64(sysconf(Int32(_SC_PAGESIZE)))
+    var mmapArgs = [0, dataLen, UInt64(PROT_READ | PROT_WRITE), UInt64(MAP_ANON | MAP_PRIVATE)]
+    let remoteDataAddr: UInt64 = try process.callRemoteFunction(at: mmapAddr, with: mmapArgs)
+    defer {
+      let munmapArgs: [UInt64] = [remoteDataAddr, dataLen]
+      do {
+        _ = try process.callRemoteFunction(at: munmapAddr, with: munmapArgs)
+      } catch {
+        print("failed remote munmap: \(error)")
+      }
+    }
+    
+    // initialize the metadata region in the remote process
+    try self.initHeapMetadata(dataAddr: remoteDataAddr, dataLen: dataLen)
+
+    // allocate an rwx region to hold the malloc_iterate callback that will be
+    // executed in the remote process
+    let codeLen = UInt64(heap_callback_len())
+    mmapArgs = [0, codeLen, UInt64(PROT_READ | PROT_WRITE | PROT_EXEC), UInt64(MAP_ANON | MAP_PRIVATE)]
+    let remoteCodeAddr: UInt64 = try process.callRemoteFunction(at: mmapAddr, with: mmapArgs)
+    defer {
+      let munmapArgs: [UInt64] = [remoteCodeAddr, codeLen]
+      do {
+        _ = try process.callRemoteFunction(at: munmapAddr, with: munmapArgs)
+      } catch {
+        print("failed remote munmap: \(error)")
       }
     }
 
-    for entry in snapshot.items {
-      body(entry.base, entry.len)
+    // copy the malloc_iterate callback implementation to the remote process
+    let codeStart = heap_callback_start()!
+    try self.process.writeMem(remoteAddr: remoteCodeAddr, localAddr: codeStart, len: UInt(codeLen))
+
+    // disable heap allocations in the remote process while iterating the heap
+    /*
+    _ = try process.callRemoteFunction(at: mallocDisableAddr)
+    defer {
+      // re-enable heap allocations
+      print("re-enable malloc")
+      _ = try? process.callRemoteFunction(at: mallocEnableAddr)
     }
+    */
+
+    // collects metadata describing each heap allocation in the remote process
+    var allocations: [(base: swift_addr_t, len: UInt64)] = []
+
+    let regionLen = endAddr - startAddr 
+    let args = [ startAddr, regionLen, remoteCodeAddr, remoteDataAddr ]
+    _ = try process.callRemoteFunction(at: mallocIterateAddr, with: args) { ptrace in
+      // This callback is invoked when a SIGTRAP is encountered, indicating
+      // there is no more room for heap metadata in the data buffer. Process
+      // all current metadata, skip the trap/break instruction, and continue
+      // iterating heap items until completion.
+      allocations.append(
+        contentsOf: try self.processHeapAllocations(dataAddr: remoteDataAddr, dataLen: dataLen))
+
+      try self.initHeapMetadata(dataAddr: remoteDataAddr, dataLen: dataLen)
+
+      var regs = try ptrace.getRegSet()
+
+      #if arch(arm64)
+        regs.pc += 4 // brk #0x0
+      #elseif arch(x86_64)
+        regs.rip += 1 // int3
+      #endif
+
+      try ptrace.setRegSet(regSet: regs)
+    }
+
+    allocations.append(
+      contentsOf: try self.processHeapAllocations(dataAddr: remoteDataAddr, dataLen: dataLen))
+
+    return allocations
   }
 }
 

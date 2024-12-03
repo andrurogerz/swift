@@ -2,6 +2,11 @@ import Foundation
 import AndroidSystemHeaders
 
 public class SymbolCache {
+  enum Error: Swift.Error {
+    case SymbolNameNotFound(_ name: String)
+    case NoSymbolForAddress(_ addr: UInt64)
+  }
+
   // dictionary of [Module Name : [Symbol Name : (UInt64, UInt64)]]
   public let symbolLookup: [String: [String: (start: UInt64, end: UInt64)]]
   let linkMap: LinkMap
@@ -33,10 +38,19 @@ public class SymbolCache {
     self.symbolLookup = symbolLookup
   }
 
+  public func address(of symbol: String) throws -> (UInt64, UInt64) {
+    for (_, symbols) in symbolLookup {
+      if let range = symbols[symbol] {
+        return range
+      }
+    }
+    throw Error.SymbolNameNotFound(symbol)
+  }
+
   // find and return symbol that covers the specified address
-  public func symbol(for address: UInt64) -> (
+  public func symbol(for address: UInt64) throws -> (
     start: UInt64, end: UInt64, module: String, name : String
-  )? {
+  ) {
     var lowerBound = 0
     var upperBound = self.sortedAddressLookup.count
     while lowerBound < upperBound {
@@ -52,6 +66,6 @@ public class SymbolCache {
         return entry
       }
     }
-    return nil
+    throw Error.NoSymbolForAddress(address)
   }
 }

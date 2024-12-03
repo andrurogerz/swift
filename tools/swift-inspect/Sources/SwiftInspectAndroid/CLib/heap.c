@@ -23,7 +23,7 @@
 #include "proc.h"
 
 #if defined(__aarch64__) || defined(__ARM64__) || defined(_M_ARM64)
-#define DEBUG_BREAK() asm("brk #0x0; nop")
+#define DEBUG_BREAK() asm("brk #0x0")
 #elif defined(_M_X64) || defined(__amd64__) || defined(__x86_64__) || defined(_M_AMD64)
 #define DEBUG_BREAK() asm("int3; nop")
 #else
@@ -32,7 +32,7 @@
 
 /* We allocate a buffer in the remote process that it populates with metadata
  * describing each heap entry it enumerates. We then read the contents of the
- * buffer, and individual heap entry contents, using process_vm_readv.
+ * buffer, and individual heap entry contents, with process_vm_readv.
  * 
  * The buffer is interpreted as an array of 8-byte pairs. The first pair
  * contains metadata describing the buffer itself: max valid index (e.g. size of
@@ -82,6 +82,14 @@ static void remote_callback_start(unsigned long base, unsigned long size, void *
 // NOTE: this function is here to mark the end of remote_callback_start and is never
 // called.
 static void remote_callback_end() {}
+
+void* heap_callback_start() {
+  return (void*)remote_callback_start;
+}
+
+size_t heap_callback_len() {
+  return (size_t)(remote_callback_end - remote_callback_start);
+}
 
 typedef struct {
   pid_t pid;
