@@ -20,7 +20,6 @@ let package = Package(
                 .target(name: "SwiftInspectClient", condition: .when(platforms: [.windows])),
                 .target(name: "SwiftInspectClientInterface", condition: .when(platforms: [.windows])),
                 .target(name: "SwiftInspectLinux", condition: .when(platforms: [.linux, .android])),
-                .target(name: "SwiftInspectAndroid", condition: .when(platforms: [.android])),
                 .target(name: "AndroidCLib", condition: .when(platforms: [.android])),
             ],
             swiftSettings: [.unsafeFlags(["-parse-as-library"])]),
@@ -35,18 +34,9 @@ let package = Package(
             name: "LinuxSystemHeaders",
             path: "Sources/SwiftInspectLinux/SystemHeaders"),
         .target(
-            name: "SwiftInspectAndroid",
-            dependencies: ["AndroidCLib", "AndroidSystemHeaders"],
-            path: "Sources/SwiftInspectAndroid",
-            exclude: ["CLib", "SystemHeaders"]),
-        .target(
             name: "AndroidCLib",
-            path: "Sources/SwiftInspectAndroid/CLib",
-            publicHeadersPath: "include",
-            cSettings: [.define("_GNU_SOURCE", to: "1")]),
-        .systemLibrary(
-            name: "AndroidSystemHeaders",
-            path: "Sources/SwiftInspectAndroid/SystemHeaders"),
+            path: "Sources/AndroidCLib",
+            publicHeadersPath: "include"),
         .systemLibrary(
             name: "SwiftInspectClientInterface"),
         .testTarget(

@@ -13,144 +13,31 @@
 #if os(Android)
 
 import Foundation
-import AndroidCLib // TODO(andrurogerz): just depend on SwiftInspectAndroid
-import AndroidSystemHeaders 
-import SwiftInspectAndroid
+import AndroidCLib
+import LinuxSystemHeaders
+import SwiftInspectLinux
 import SwiftRemoteMirror
 
-internal final class AndroidRemoteProcess: RemoteProcess {
-  public typealias ProcessIdentifier = pid_t
-  public typealias ProcessHandle = SwiftInspectAndroid.Process
-
-  public private(set) var process: ProcessHandle
-  public private(set) var context: SwiftReflectionContextRef!
-  public private(set) var processIdentifier: ProcessIdentifier
-  public private(set) var processName: String = "<unknown process>"
-
-  let ptrace: SwiftInspectAndroid.PTrace
-  let memoryMap: [SwiftInspectAndroid.ProcFs.MemoryMapEntry]
-  let symbolCache: SwiftInspectAndroid.SymbolCache
-
-  static var QueryDataLayout: QueryDataLayoutFunction {
-    return { (context, type, _, output) in
-      guard let output = output else { return 0 }
-
-      switch type {
-      case DLQ_GetPointerSize:
-        let size = UInt8(MemoryLayout<UnsafeRawPointer>.stride)
-        output.storeBytes(of: size, toByteOffset: 0, as: UInt8.self)
-        return 1
-
-      case DLQ_GetSizeSize:
-        let size = UInt8(MemoryLayout<UInt>.stride) // UInt is word-size like size_t
-        output.storeBytes(of: size, toByteOffset: 0, as: UInt8.self)
-        return 1
-
-      case DLQ_GetLeastValidPointerValue:
-        let value: UInt64 = 0x1000
-        output.storeBytes(of: value, toByteOffset: 0, as: UInt64.self)
-        return 1
-
-      default:
-        return 0
-      }
-    }
+internal final class AndroidRemoteProcess: LinuxRemoteProcess {
+  enum RemoteProcessError: Error {
+    case missingSymbol(_ name: String)
   }
 
-  static var Free: FreeFunction {
-    return { (_, bytes, _) in
-      free(UnsafeMutableRawPointer(mutating: bytes))
-    }
-  }
-  static var ReadBytes: ReadBytesFunction {
-    return { (context, address, size, _) in
-      let process: AndroidRemoteProcess = AndroidRemoteProcess.fromOpaque(context!)
+  let ptrace: SwiftInspectLinux.PTrace
 
-      guard let byteArray: [UInt8] = try? process.process.readArray(address: address, upToCount: UInt(size)),
-            let buffer = malloc(byteArray.count) else {
-        return nil
-      }
-
-      byteArray.withUnsafeBytes {
-        buffer.copyMemory(from: $0.baseAddress!, byteCount: byteArray.count)
-      }
-
-      return UnsafeRawPointer(buffer)
-    }
-  }
-
-  static var GetStringLength: GetStringLengthFunction {
-    return { (context, address) in
-      let process: AndroidRemoteProcess = AndroidRemoteProcess.fromOpaque(context!)
-
-      guard let string = try? process.process.readString(address: address),
-            let len = UInt64(exactly: string.count) else {
-          return 0
-      }
-
-      return len
-    }
-  }
-
-  static var GetSymbolAddress: GetSymbolAddressFunction {
-    return { (context, symbol, length) in
-      let process: AndroidRemoteProcess =
-        AndroidRemoteProcess.fromOpaque(context!)
-
-      guard let symbol = symbol else { return 0 }
-      let name: String = symbol.withMemoryRebound(to: UInt8.self, capacity: Int(length)) {
-        let buffer = UnsafeBufferPointer(start: $0, count: Int(length))
-        return String(decoding: buffer, as: UTF8.self)
-      }
-
-      guard let (startAddr, _) = try? process.symbolCache.address(of: name) else { return 0 }
-      return startAddr
-    }
-  }
-
-  init?(processId: ProcessIdentifier) {
-    self.processIdentifier = processId
-
+  override init?(processId: ProcessIdentifier) {
     do {
-      let path = "/proc/\(processId)/cmdline"
-      let cmdline = try String(contentsOfFile: path, encoding: .ascii)
-      self.processName = cmdline;
-
-      let process = try SwiftInspectAndroid.Process(processId)
-      self.process = process
-
-      let ptrace = try SwiftInspectAndroid.PTrace(process: processId)
+      let ptrace = try SwiftInspectLinux.PTrace(process: processId)
       self.ptrace = ptrace
-
-      let symbolCache = try SwiftInspectAndroid.SymbolCache(for: process)
-      self.symbolCache = symbolCache
-
-      guard let memoryMap = try SwiftInspectAndroid.ProcFs.loadMaps(for: processId) else {
-        print("failed loading memory map for \(processId)")
-        return nil
-      }
-      self.memoryMap = memoryMap
-
     } catch {
       print("failed initialization: \(error)")
       return nil
     }
-
-    guard let context = swift_reflection_createReflectionContextWithDataLayout(self.toOpaqueRef(),
-      Self.QueryDataLayout, Self.Free, Self.ReadBytes, Self.GetStringLength, Self.GetSymbolAddress)
-      else { return nil }
-    self.context = context
+    super.init(processId: processId)
   }
 
-  func symbolicate(_ address: swift_addr_t) -> (module: String?, symbol: String?) {
-    guard let symbol = try? self.symbolCache.symbol(for: address) else {
-      return (nil, nil)
-    }
-    return (module: symbol.module, symbol: symbol.name)
-  }
-
-  internal func iterateHeap(_ body: (swift_addr_t, UInt64) -> Void) {
-    for entry in self.memoryMap {
+  override internal func iterateHeap(_ body: (swift_addr_t, UInt64) -> Void) {
+    for entry in self.memoryMap.entries {
       guard let name = entry.pathname,
         name == "[anon:libc_malloc]" ||
         name.hasPrefix("[anon:scudo:") ||
@@ -198,38 +85,46 @@ internal final class AndroidRemoteProcess: RemoteProcess {
 
   internal func iterateHeapRegion(startAddr: UInt64, endAddr: UInt64)
       throws -> [(base: swift_addr_t, len: UInt64)] {
-    let (mmapAddr, _) = try symbolCache.address(of: "mmap")
-    let (munmapAddr, _) = try symbolCache.address(of: "munmap")
-    let (mallocIterateAddr, _) = try symbolCache.address(of: "malloc_iterate")
+    guard let (mmapAddr, _) = symbolCache.address(of: "mmap") else {
+      throw RemoteProcessError.missingSymbol("mmap")
+    }
+
+    guard let (munmapAddr, _) = symbolCache.address(of: "munmap") else {
+      throw RemoteProcessError.missingSymbol("mmap")
+    }
+
+    guard let (mallocIterateAddr, _) = symbolCache.address(of: "malloc_iterate") else {
+      throw RemoteProcessError.missingSymbol("malloc_iterate")
+    }
 
     /* We allocate a page-sized buffer in the remote process that malloc_iterate
      * populates with metadata describing each heap entry it enumerates.
-     * 
+     *
      * The buffer is interpreted as an array of 8-byte pairs. The first pair
      * contains metadata describing the buffer itself: max valid index (e.g.
      * the size of the buffer) and next index (e.g. write cursor/position).
      * Each subsequent pair describes the address and length of a heap entry in
      * the remote process.
-     * 
+     *
      * ------------
      * | uint64_t | max valid index (e.g. sizeof(buffer) / sizeof(uint64_t))
      * ------------
      * | uint64_t | next free index (starts at 2)
      * ------------
      * | uint64_t | heap item 1 address
-     * ------------ 
+     * ------------
      * | uint64_t | heap item 1 size
      * ------------
      * | uint64_t | heap item 2 address
-     * ------------ 
+     * ------------
      * | uint64_t | heap item 2 size
      * ------------
      * | uint64_t | ...
-     * ------------ 
+     * ------------
      * | uint64_t | ...
      * ------------
      * | uint64_t | heap item N address
-     * ------------ 
+     * ------------
      * | uint64_t | heap item N size
      * ------------
      */
@@ -240,7 +135,7 @@ internal final class AndroidRemoteProcess: RemoteProcess {
       let munmapArgs: [UInt64] = [remoteDataAddr, dataLen]
       _ = try? self.ptrace.callRemoteFunction(at: munmapAddr, with: munmapArgs)
     }
-    
+
     // initialize the metadata region in the remote process
     try self.initHeapMetadata(dataAddr: remoteDataAddr, dataLen: dataLen)
 
@@ -261,7 +156,7 @@ internal final class AndroidRemoteProcess: RemoteProcess {
     // collects metadata describing each heap allocation in the remote process
     var allocations: [(base: swift_addr_t, len: UInt64)] = []
 
-    let regionLen = endAddr - startAddr 
+    let regionLen = endAddr - startAddr
     let args = [ startAddr, regionLen, remoteCodeAddr, remoteDataAddr ]
     _ = try self.ptrace.callRemoteFunction(at: mallocIterateAddr, with: args) {
       // This callback is invoked when a SIGTRAP is encountered, indicating
@@ -276,9 +171,9 @@ internal final class AndroidRemoteProcess: RemoteProcess {
       var regs = try self.ptrace.getRegSet()
 
       #if arch(arm64)
-        regs.pc += 4 // brk #0x0
+      regs.pc += 4 // brk #0x0
       #elseif arch(x86_64)
-        regs.rip += 1 // int3
+      regs.rip += 1 // int3
       #endif
 
       try self.ptrace.setRegSet(regSet: regs)

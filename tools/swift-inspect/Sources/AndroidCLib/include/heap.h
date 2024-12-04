@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2020 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2024 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -13,19 +13,23 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
+#include <unistd.h>
 
 #if defined(__cplusplus)
 extern "C" {
 #endif
 
-typedef bool (*trap_callback_t)(void* context);
+#define MAX_VALID_IDX 0
+#define NEXT_FREE_IDX 1
+#define HEADER_SIZE 2
+#define ENTRY_SIZE  2
 
-bool ptrace_call_remote_function(pid_t pid, unsigned long func_addr,
-    const unsigned long args[6], unsigned long *func_result);
-bool ptrace_call_remote_function_with_trap_callback(pid_t pid,
-    unsigned long func_addr, const unsigned long args[6],
-    unsigned long *func_result, trap_callback_t trap_callback,
-    void* trap_callback_context);
+typedef void (*heap_iterate_callback_t)(void* context, uint64_t base, uint64_t len);
+bool heap_iterate(pid_t pid, void* callback_context, heap_iterate_callback_t callback);
+
+void* heap_callback_start();
+size_t heap_callback_len();
 
 #if defined(__cplusplus)
 }

@@ -16,6 +16,7 @@ import LinuxSystemHeaders
 public class Process {
   public enum ProcessError: Error {
     case processVmReadFailure(pid: pid_t, address: UInt64, size: UInt64)
+    case processVmWriteFailure(pid: pid_t, address: UInt64, size: UInt64)
     case malformedString(address: UInt64)
   }
 
@@ -90,5 +91,22 @@ public class Process {
     }
 
     return array
+  }
+
+  public func writeMem(remoteAddr: UInt64, localAddr: UnsafeRawPointer, len: UInt) throws {
+    #if os(Android)
+    // Android uses the kernel definition for iovec
+    let size = __kernel_size_t(len)
+    #else
+    let size = size_t(len)
+    #endif
+
+    var local = iovec(iov_base: UnsafeMutableRawPointer(mutating: localAddr), iov_len: size)
+    var remote = iovec(iov_base: UnsafeMutableRawPointer(bitPattern: UInt(remoteAddr)), iov_len: size)
+
+    let bytesWritten = process_vm_writev(self.pid, &local, 1, &remote, 1, 0)
+    guard bytesWritten == len else {
+      throw ProcessError.processVmWriteFailure(pid: self.pid, address: remoteAddr, size: UInt64(len))
+    }
   }
 }
