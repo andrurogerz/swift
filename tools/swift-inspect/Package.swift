@@ -19,7 +19,7 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .target(name: "SwiftInspectClient", condition: .when(platforms: [.windows])),
                 .target(name: "SwiftInspectClientInterface", condition: .when(platforms: [.windows])),
-                .target(name: "SwiftInspectLinux", condition: .when(platforms: [.linux])),
+                .target(name: "SwiftInspectLinux", condition: .when(platforms: [.linux, .android])),
                 .target(name: "SwiftInspectAndroid", condition: .when(platforms: [.android])),
                 .target(name: "AndroidCLib", condition: .when(platforms: [.android])),
             ],
@@ -34,7 +34,7 @@ let package = Package(
         .systemLibrary(
             name: "LinuxSystemHeaders",
             path: "Sources/SwiftInspectLinux/SystemHeaders"),
-        .systemLibrary(
+        .target(
             name: "SwiftInspectAndroid",
             dependencies: ["AndroidCLib", "AndroidSystemHeaders"],
             path: "Sources/SwiftInspectAndroid",
