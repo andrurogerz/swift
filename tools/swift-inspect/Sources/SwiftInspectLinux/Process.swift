@@ -13,6 +13,21 @@
 import Foundation
 import LinuxSystemHeaders
 
+// The Android version of iovec defineds iov_len as __kernel_size_t, while the
+// standard Linux definition is size_t. This extension makes the difference
+// easier to deal with.
+public extension iovec {
+  init<T: BinaryInteger>(iov_base: UnsafeMutableRawPointer?, iov_len: T) {
+    self.init()
+    self.iov_base = iov_base
+    #if os(Android)
+      self.iov_len = __kernel_size_t(iov_len)
+    #else
+      self.iov_len = size_t(iov_len)
+    #endif
+  }
+}
+
 public class Process {
   public enum ProcessError: Error {
     case processVmReadFailure(pid: pid_t, address: UInt64, size: UInt64)
@@ -71,13 +86,7 @@ public class Process {
   public func readArray<T>(address: UInt64, upToCount: UInt) throws -> [T] {
     guard upToCount > 0 else { return [] }
 
-    #if os(Android)
-    // Android uses the kernel definition for iovec
-    let maxSize = __kernel_size_t(upToCount * UInt(MemoryLayout<T>.stride))
-    #else
-    let maxSize = size_t(upToCount * UInt(MemoryLayout<T>.stride))
-    #endif
-
+    let maxSize = upToCount * UInt(MemoryLayout<T>.stride)
     let array: [T] = Array(unsafeUninitializedCapacity: Int(upToCount)) { buffer, initCount in
       var local = iovec(iov_base: buffer.baseAddress!, iov_len: maxSize)
       var remote = iovec(
@@ -94,15 +103,8 @@ public class Process {
   }
 
   public func writeMem(remoteAddr: UInt64, localAddr: UnsafeRawPointer, len: UInt) throws {
-    #if os(Android)
-    // Android uses the kernel definition for iovec
-    let size = __kernel_size_t(len)
-    #else
-    let size = size_t(len)
-    #endif
-
-    var local = iovec(iov_base: UnsafeMutableRawPointer(mutating: localAddr), iov_len: size)
-    var remote = iovec(iov_base: UnsafeMutableRawPointer(bitPattern: UInt(remoteAddr)), iov_len: size)
+    var local = iovec(iov_base: UnsafeMutableRawPointer(mutating: localAddr), iov_len: len)
+    var remote = iovec(iov_base: UnsafeMutableRawPointer(bitPattern: UInt(remoteAddr)), iov_len: len)
 
     let bytesWritten = process_vm_writev(self.pid, &local, 1, &remote, 1, 0)
     guard bytesWritten == len else {

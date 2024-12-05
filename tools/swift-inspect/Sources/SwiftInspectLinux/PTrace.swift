@@ -62,7 +62,7 @@ public class PTrace {
     try withUnsafeMutableBytes(of: &regSet) {
       var vec = iovec(
         iov_base: $0.baseAddress!,
-        iov_len: UInt(MemoryLayout<RegisterSet>.size))
+        iov_len: MemoryLayout<RegisterSet>.size)
       if ptrace_getregset(self.pid, NT_PRSTATUS, &vec) == -1 {
         throw Error.PTraceFailure(PTRACE_GETREGSET, pid: self.pid)
       }
@@ -75,7 +75,7 @@ public class PTrace {
     try withUnsafeMutableBytes(of: &regSetCopy) {
       var vec = iovec(
         iov_base: $0.baseAddress!,
-        iov_len: UInt(MemoryLayout<RegisterSet>.size))
+        iov_len: MemoryLayout<RegisterSet>.size)
       if ptrace_setregset(self.pid, NT_PRSTATUS, &vec) == -1 {
         throw Error.PTraceFailure(PTRACE_SETREGSET, pid: self.pid)
       }

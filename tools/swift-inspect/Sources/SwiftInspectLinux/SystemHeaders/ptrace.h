@@ -1,5 +1,6 @@
 #include <signal.h>
-#include <sys\ptrace.h>
+#include <sys/ptrace.h>
+#include <linux/ptrace.h>
 
 static inline
 int ptrace_attach(pid_t pid) {
