@@ -20,10 +20,10 @@
 extern "C" {
 #endif
 
-#define MAX_VALID_IDX 0
-#define NEXT_FREE_IDX 1
-#define HEADER_SIZE 2
-#define ENTRY_SIZE  2
+#define HEAP_ITERATE_DATA_MAX_VALID_IDX 0
+#define HEAP_ITERATE_DATA_NEXT_FREE_IDX 1
+#define HEAP_ITERATE_DATA_HEADER_SIZE 2
+#define HEAP_ITERATE_DATA_ENTRY_SIZE  2
 
 typedef void (*heap_iterate_callback_t)(void* context, uint64_t base, uint64_t len);
 bool heap_iterate(pid_t pid, void* callback_context, heap_iterate_callback_t callback);

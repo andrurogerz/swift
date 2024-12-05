@@ -57,11 +57,11 @@
 // and maintainable.
 static void remote_callback_start(unsigned long base, unsigned long size, void *arg) {
   volatile uint64_t *data = (uint64_t*)arg;
-  while (data[NEXT_FREE_IDX] >= data[MAX_VALID_IDX]) {
+  while (data[HEAP_ITERATE_DATA_NEXT_FREE_IDX] >= data[HEAP_ITERATE_DATA_MAX_VALID_IDX]) {
     DEBUG_BREAK();
   }
-  data[data[NEXT_FREE_IDX]++] = base;
-  data[data[NEXT_FREE_IDX]++] = size;
+  data[data[HEAP_ITERATE_DATA_NEXT_FREE_IDX]++] = base;
+  data[data[HEAP_ITERATE_DATA_NEXT_FREE_IDX]++] = size;
 }
 
 // NOTE: this function is here to mark the end of remote_callback_start and is never

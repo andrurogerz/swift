@@ -12,35 +12,26 @@ public class PTrace {
   let pid: pid_t
 
   public init(process pid: pid_t) throws {
-    if ptrace_attach(pid) == -1 {
-      throw Error.PTraceFailure(PTRACE_ATTACH, pid: pid)
-    }
+    if ptrace_attach(pid) == -1 { throw Error.PTraceFailure(PTRACE_ATTACH, pid: pid) }
 
     while true {
-      var status: Int32 = 0;
+      var status: Int32 = 0
       let result = waitpid(pid, &status, 0)
       if result == -1 {
         if get_errno() == EINTR { continue }
         throw Error.WaitFailure(pid: pid)
       }
 
-      if result == pid && wIfStopped(status) {
-        break
-      }
+      if result == pid && wIfStopped(status) { break }
     }
 
     self.pid = pid
   }
 
-  deinit {
-    ptrace_detach(self.pid)
-  }
-
+  deinit { ptrace_detach(self.pid) }
 
   public func cont() throws {
-    if ptrace_continue(self.pid) == -1 {
-      throw Error.PTraceFailure(PTRACE_CONT, pid: self.pid)
-    }
+    if ptrace_continue(self.pid) == -1 { throw Error.PTraceFailure(PTRACE_CONT, pid: self.pid) }
   }
 
   public func getSigInfo() throws -> siginfo_t {
@@ -60,9 +51,7 @@ public class PTrace {
   public func getRegSet() throws -> RegisterSet {
     var regSet = RegisterSet()
     try withUnsafeMutableBytes(of: &regSet) {
-      var vec = iovec(
-        iov_base: $0.baseAddress!,
-        iov_len: MemoryLayout<RegisterSet>.size)
+      var vec = iovec(iov_base: $0.baseAddress!, iov_len: MemoryLayout<RegisterSet>.size)
       if ptrace_getregset(self.pid, NT_PRSTATUS, &vec) == -1 {
         throw Error.PTraceFailure(PTRACE_GETREGSET, pid: self.pid)
       }
@@ -73,26 +62,23 @@ public class PTrace {
   public func setRegSet(regSet: RegisterSet) throws {
     var regSetCopy = regSet
     try withUnsafeMutableBytes(of: &regSetCopy) {
-      var vec = iovec(
-        iov_base: $0.baseAddress!,
-        iov_len: MemoryLayout<RegisterSet>.size)
+      var vec = iovec(iov_base: $0.baseAddress!, iov_len: MemoryLayout<RegisterSet>.size)
       if ptrace_setregset(self.pid, NT_PRSTATUS, &vec) == -1 {
         throw Error.PTraceFailure(PTRACE_SETREGSET, pid: self.pid)
       }
     }
   }
 
-  public func callRemoteFunction(at address: UInt64, with args: [UInt64] = [],
-      onTrap callback: (() throws -> Void)? = nil) throws -> UInt64 {
+  public func callRemoteFunction(
+    at address: UInt64, with args: [UInt64] = [], onTrap callback: (() throws -> Void)? = nil
+  ) throws -> UInt64 {
 
     guard args.count <= 6 else {
       throw Error.IllegalArgument(description: "max of 6 arguments allowed")
     }
 
     let origRegs = try self.getRegSet()
-    defer {
-      try? self.setRegSet(regSet: origRegs)
-    }
+    defer { try? self.setRegSet(regSet: origRegs) }
 
     // Set the return address to 0. This forces the function to return to 0 on
     // completion, resulting in a SIGSEGV with address 0 which will interrupt
@@ -100,14 +86,7 @@ public class PTrace {
     // will restore the original state and continue the process.
     let returnAddr: UInt64 = 0
 
-    var newRegs = origRegs.setupCall(funcAddr: address, args: args, returnAddr: returnAddr)
-
-#if arch(x86_64)
-    // push the return address onto the stack on x86_64
-    let stackAddr = newRegs.stackReserve(byteCount: UInt(MemoryLayout<UInt64>.size))
-    try self.pokeData(addr: stackAddr, value: returnAddr)
-#endif
-
+    var newRegs = try origRegs.setupCall(self, to: address, with: args, returnTo: returnAddr)
     try self.setRegSet(regSet: newRegs)
     try self.cont()
 

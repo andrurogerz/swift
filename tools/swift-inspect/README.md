@@ -41,13 +41,13 @@ set ANDROID_ARCH=aarch64
 set ANDROID_API_LEVEL=29
 set ANDROID_NDK_ROOT=C:\Android\android-sdk\ndk\26.3.11579264
 set SWIFT_ANDROID_SDK_ROOT=C:\Users\Andrew\AppData\Local\Programs\Swift\Platforms\0.0.0\Android.platform\Developer\SDKs\Android.sdk
-swift build --triple %ANDROID_ARCH%-unknown-linux-android%ANDROID_API_LEVEL% \
-    --sdk %ANDROID_NDK_ROOT%\toolchains\llvm\prebuilt\windows-x86_64\sysroot
-    -Xswiftc -sdk -Xswiftc %SWIFT_ANDROID_SDK_ROOT%
-    -Xswiftc -sysroot -Xswiftc %ANDROID_NDK_ROOT%\toolchains\llvm\prebuilt\windows-x86_64\sysroot
-    -Xswiftc -I -Xswiftc %SWIFT_ANDROID_SDK_ROOT%\usr\include
-    -Xlinker -L%ANDROID_NDK_ROOT%\toolchains\llvm\prebuilt\windows-x86_64\lib\clang\17.0.2\lib\linux\%ANDROID_ARCH%
-    -Xcc -I%SWIFT_ANDROID_SDK_ROOT%\usr\include\swift\SwiftRemoteMirror
+swift build --triple %ANDROID_ARCH%-unknown-linux-android%ANDROID_API_LEVEL% `
+    --sdk %ANDROID_NDK_ROOT%\toolchains\llvm\prebuilt\windows-x86_64\sysroot `
+    -Xswiftc -sdk -Xswiftc %SWIFT_ANDROID_SDK_ROOT% `
+    -Xswiftc -sysroot -Xswiftc %ANDROID_NDK_ROOT%\toolchains\llvm\prebuilt\windows-x86_64\sysroot `
+    -Xswiftc -I -Xswiftc %SWIFT_ANDROID_SDK_ROOT%\usr\include `
+    -Xlinker -L%ANDROID_NDK_ROOT%\toolchains\llvm\prebuilt\windows-x86_64\lib\clang\17.0.2\lib\linux\%ANDROID_ARCH% `
+    -Xcc -I%SWIFT_ANDROID_SDK_ROOT%\usr\include\swift\SwiftRemoteMirror `
     -Xlinker %SWIFT_ANDROID_SDK_ROOT%\usr\lib\swift\android\%ANDROID_ARCH%\libswiftRemoteMirror.so
 ~~~
 
